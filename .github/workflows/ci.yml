@@ -1,0 +1,39 @@
+# Same checks as the local hooks, run independently and on both supported Node lines.
+# Hooks are ergonomics; this workflow is the gate.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Pi declares node >=22.19.0. Both lines are tested so a syntax that only
+        # one loader generation accepts cannot land unnoticed.
+        node: ["22.19", "24"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: lint and format
+        run: npx biome ci .
+      - name: types
+        run: npx tsc --noEmit
+      - name: tests with coverage thresholds
+        run: npm run test:coverage
