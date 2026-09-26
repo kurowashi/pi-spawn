@@ -1,0 +1,96 @@
+/**
+ * Unit: the AgentSession adapter.
+ *
+ * The reply-capture path is the one piece of real logic between the SDK and this
+ * extension, so it is tested against a fake session rather than left to the
+ * integration tests, which cannot see event ordering.
+ *
+ * The reply timeout is intentionally not tested: it is a wall-clock constant,
+ * and a test that sleeps for it would be worse than no test.
+ */
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { wrapSession } from "../../src/spawn.ts";
+import type { AgentChannel } from "../../src/types.ts";
+
+interface Fake {
+	channel: AgentChannel;
+	calls: string[];
+	emit(event: unknown): void;
+}
+
+function makeFake(options: { streaming?: boolean; messages?: unknown[] } = {}): Fake {
+	const listeners = new Set<(event: unknown) => void>();
+	const calls: string[] = [];
+	const session = {
+		isStreaming: options.streaming ?? false,
+		messages: options.messages ?? [],
+		prompt: async (text: string) => void calls.push(`prompt:${text}`),
+		steer: async (text: string) => void calls.push(`steer:${text}`),
+		followUp: async (text: string) => void calls.push(`followUp:${text}`),
+		abort: async () => void calls.push("abort"),
+		subscribe: (listener: (event: unknown) => void) => {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
+	};
+	return {
+		channel: wrapSession(session as unknown as AgentSession),
+		calls,
+		emit: (event) => {
+			for (const listener of [...listeners]) listener(event);
+		},
+	};
+}
+
+test("reports the session streaming state", () => {
+	assert.equal(makeFake({ streaming: true }).channel.isStreaming(), true);
+	assert.equal(makeFake({ streaming: false }).channel.isStreaming(), false);
+});
+
+test("proxies every session operation", async () => {
+	const fake = makeFake();
+	await fake.channel.prompt("task");
+	await fake.channel.steer("interrupt");
+	await fake.channel.followUp("queued");
+	await fake.channel.abort();
+	assert.deepEqual(fake.calls, ["prompt:task", "steer:interrupt", "followUp:queued", "abort"]);
+});
+
+test("resolves the waiting run with the first assistant message", async () => {
+	const fake = makeFake();
+	const reply = fake.channel.nextAssistantText();
+
+	fake.emit({ type: "message_end", message: { role: "tool", content: "not a reply" } });
+	fake.emit({ type: "tool_execution_start", toolName: "read" });
+	fake.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the answer" }] } });
+
+	assert.equal(await reply, "the answer");
+});
+
+test("stops listening once the reply arrived", async () => {
+	const fake = makeFake();
+	const reply = fake.channel.nextAssistantText();
+	fake.emit({ type: "message_end", message: { role: "assistant", content: "first" } });
+	assert.equal(await reply, "first");
+	// A second emission must not throw after the subscription was removed.
+	fake.emit({ type: "message_end", message: { role: "assistant", content: "second" } });
+});
+
+test("reads the last assistant text, skipping later tool traffic", () => {
+	const fake = makeFake({
+		messages: [
+			{ role: "assistant", content: "the answer" },
+			{ role: "tool", content: "result" },
+			{ role: "user", content: "next" },
+		],
+	});
+	assert.equal(fake.channel.lastAssistantText(), "the answer");
+});
+
+test("has no last assistant text before the first turn", () => {
+	assert.equal(makeFake({ messages: [{ role: "user", content: "hi" }] }).channel.lastAssistantText(), undefined);
+	assert.equal(makeFake().channel.lastAssistantText(), undefined);
+});

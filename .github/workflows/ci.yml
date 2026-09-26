@@ -31,9 +31,5 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - name: lint and format
-        run: npx biome ci .
-      - name: types
-        run: npx tsc --noEmit
-      - name: tests with coverage thresholds
-        run: npm run test:coverage
+      - name: lint, types, tests, coverage thresholds
+        run: npm run verify

@@ -7,7 +7,9 @@
 		"defaultBranch": "main"
 	},
 	"files": {
-		"includes": ["src/**", "test/**", "*.json", "*.jsonc", "*.yml", "*.md"]
+		// Code only. Config files are validated by their own tools (npm, tsc, Biome schema)
+		// and reformatting them explodes readable one-line arrays into noise.
+		"includes": ["src/**", "test/**"]
 	},
 	"formatter": {
 		"enabled": true,
@@ -43,6 +45,9 @@
 				"useConst": "error"
 			},
 			"complexity": {
+				// Off because tsconfig sets noPropertyAccessFromIndexSignature: pointed the
+				// other way, the two rules together make index-signature access impossible.
+				"useLiteralKeys": "off",
 				"noExcessiveCognitiveComplexity": {
 					"level": "error",
 					"options": {

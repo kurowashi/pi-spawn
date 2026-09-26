@@ -14,6 +14,7 @@ import { PACKAGE_ROOT } from "../helpers/extension.ts";
 
 /** Pi supplies these to extensions; anything else must be justified in an ADR. */
 const ALLOWED_PEER_DEPENDENCIES = new Set([
+	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-ai",
 	"@earendil-works/pi-coding-agent",
 	"@earendil-works/pi-tui",
@@ -23,6 +24,7 @@ const ALLOWED_PEER_DEPENDENCIES = new Set([
 /** Development tooling allowlist. Adding one is a decision, not an accident. */
 const ALLOWED_DEV_DEPENDENCIES = new Set([
 	"@biomejs/biome",
+	"@earendil-works/pi-agent-core",
 	"@earendil-works/pi-ai",
 	"@earendil-works/pi-coding-agent",
 	"@types/node",

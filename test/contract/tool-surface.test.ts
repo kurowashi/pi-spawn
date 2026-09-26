@@ -1,22 +1,33 @@
 /**
  * Contract: the model-facing surface stays exactly what v1 decided.
  *
- * See docs/adr/0002-two-tools-and-token-budget.md and AGENTS.md.
+ * The parent registers one tool; children receive a second one as a custom tool.
+ * Both are checked here, because both are paid for on every request inside the
+ * session that sees them.
+ *
+ * See docs/design.md and docs/adr/0002-two-tools-and-token-budget.md.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createRunRegistry } from "../../src/registry.ts";
+import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
 import { loadSpawnTools } from "../helpers/extension.ts";
 
-/** v1 surface. Adding a tool is a decision that must update this list. */
-const EXPECTED_TOOLS = ["message_agent", "spawn_agent"];
+/** The parent-facing surface. Adding a tool is a decision that updates this list. */
+const EXPECTED_PARENT_TOOLS = ["spawn_agents"];
 
 /** A tool description must earn its place in every request. */
 const MAX_DESCRIPTION_CHARS = 160;
 
 /** Top-level parameters per tool. A tool needing more is probably two tools. */
-const MAX_TOP_LEVEL_PARAMETERS = 6;
+const MAX_TOP_LEVEL_PARAMETERS = 3;
+
+/** The child-facing surface, built exactly as spawn_agents builds it. */
+function childTool(): ToolDefinition {
+	return createMessageAgentTool({ runId: "test", self: {}, registry: createRunRegistry() });
+}
 
 /** The subset of JSON Schema this contract reads from a TypeBox schema. */
 interface SchemaShape {
@@ -29,36 +40,45 @@ function schemaOf(tool: ToolDefinition): SchemaShape {
 	return tool.parameters as SchemaShape;
 }
 
-test("registers exactly the v1 tools", async () => {
+test("the parent registers exactly one delegation tool", async () => {
 	const tools = await loadSpawnTools();
-	assert.deepEqual([...tools.keys()].sort(), EXPECTED_TOOLS);
+	assert.deepEqual([...tools.keys()].sort(), EXPECTED_PARENT_TOOLS);
+});
+
+test("children receive exactly one tool, and it is not a spawn tool", () => {
+	const tool = childTool();
+	assert.equal(tool.name, "message_agent");
+	assert.ok(!tool.name.includes("spawn"), "a child must never be able to spawn a grandchild");
 });
 
 test("every tool has label, description, and schema", async () => {
-	const tools = await loadSpawnTools();
-	for (const [name, tool] of tools) {
-		assert.ok(tool.label.length > 0, `${name} needs a label`);
-		assert.ok(tool.description.length > 0, `${name} needs a description`);
-		assert.equal(schemaOf(tool).type, "object", `${name} parameters must be an object schema`);
+	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	for (const tool of tools) {
+		assert.ok(tool.label.length > 0, `${tool.name} needs a label`);
+		assert.ok(tool.description.length > 0, `${tool.name} needs a description`);
+		assert.equal(schemaOf(tool).type, "object", `${tool.name} parameters must be an object schema`);
 	}
 });
 
 test("descriptions stay within the per-tool character cap", async () => {
-	const tools = await loadSpawnTools();
-	for (const [name, tool] of tools) {
+	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	for (const tool of tools) {
 		assert.ok(
 			tool.description.length <= MAX_DESCRIPTION_CHARS,
-			`${name} description is ${tool.description.length} chars, cap is ${MAX_DESCRIPTION_CHARS}`,
+			`${tool.name} description is ${tool.description.length} chars, cap is ${MAX_DESCRIPTION_CHARS}`,
 		);
 	}
 });
 
 test("schemas are closed and stay within the parameter cap", async () => {
-	const tools = await loadSpawnTools();
-	for (const [name, tool] of tools) {
+	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	for (const tool of tools) {
 		const schema = schemaOf(tool);
-		assert.equal(schema.additionalProperties, false, `${name} must reject unknown parameters`);
+		assert.equal(schema.additionalProperties, false, `${tool.name} must reject unknown parameters`);
 		const count = Object.keys(schema.properties ?? {}).length;
-		assert.ok(count <= MAX_TOP_LEVEL_PARAMETERS, `${name} has ${count} parameters, cap is ${MAX_TOP_LEVEL_PARAMETERS}`);
+		assert.ok(
+			count <= MAX_TOP_LEVEL_PARAMETERS,
+			`${tool.name} has ${count} parameters, cap is ${MAX_TOP_LEVEL_PARAMETERS}`,
+		);
 	}
 });
