@@ -106,8 +106,6 @@ export interface AgentChannel {
 	 * resources, then dispose the session itself.
 	 */
 	dispose(): Promise<void>;
-	/** Resolves with the text of the next assistant message. */
-	nextAssistantText(): Promise<string>;
 	/** Text of the last assistant message, or undefined when there is none. */
 	lastAssistantText(): string | undefined;
 	/** Current activity, billed usage, and transcript path. Safe to call while the run works. */
@@ -119,8 +117,6 @@ export interface RunHandle {
 	runId: string;
 	agent: string;
 	channel: AgentChannel;
-	/** True while a sibling is blocked waiting for this run's reply. */
-	hasInboundWait: boolean;
 	/** Turns a sibling message started; the spawn call owns their completion. */
 	induced: Set<Promise<void>>;
 	/** Failures from induced turns, reported on this run's result. */

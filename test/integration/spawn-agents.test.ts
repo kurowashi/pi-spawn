@@ -54,7 +54,6 @@ interface FakeRun {
 
 function createFakeRun(agent: string): FakeRun {
 	let abortPrompt: (() => void) | undefined;
-	let resolveReply: ((text: string) => void) | undefined;
 	let releaseDelivery: (() => void) | undefined;
 	const run: FakeRun = {
 		steered: [],
@@ -80,17 +79,11 @@ function createFakeRun(agent: string): FakeRun {
 		channel: undefined as never,
 	};
 
-	const reply = (text: string): void => {
-		resolveReply?.(`${agent} replied to "${text}"`);
-		resolveReply = undefined;
-	};
-
 	run.channel = {
 		prompt: async () => {},
 		deliver: async (text) => {
 			if (run.streaming) run.steered.push(text);
 			else run.queued.push(text);
-			reply(text);
 			if (run.failDeliveries) throw new Error("induced exploded");
 			if (run.holdDeliveries) {
 				await new Promise<void>((resolve) => {
@@ -107,7 +100,6 @@ function createFakeRun(agent: string): FakeRun {
 		dispose: async () => {
 			run.disposed = true;
 		},
-		nextAssistantText: () => new Promise((resolve) => (resolveReply = resolve)),
 		lastAssistantText: () => run.output,
 		snapshot: () => ({
 			activity: run.activity,
@@ -202,13 +194,12 @@ const BOTH_TASKS = {
 /* Tests                                                               */
 /* ------------------------------------------------------------------ */
 
-test("a run asks a sibling and returns the reply", async () => {
-	const harness = makeHarness(DEFINITIONS, async (input, run, tools) => {
+test("a message starts a turn on an idle sibling", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
 		if (input.agent.name !== "reviewer") return;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool, "the child receives the message tool");
-		const reply = textOf(await callTool(tool, { to: "writer", text: "is the draft ready?", wait_for_reply: true }));
-		run.output = `reviewer heard: ${reply}`;
+		await callTool(tool, { to: "writer", text: "is the draft ready?" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -218,7 +209,6 @@ test("a run asks a sibling and returns the reply", async () => {
 		["reviewer", "writer"],
 	);
 	assert.equal(results[0]?.error, undefined);
-	assert.match(results[0]?.output ?? "", /writer replied to "is the draft ready\?"/);
 	assert.deepEqual(harness.runs.get("writer")?.queued, ["is the draft ready?"], "an idle sibling gets a new turn");
 	assert.deepEqual(harness.runs.get("writer")?.steered, []);
 });
@@ -231,7 +221,7 @@ test("a streaming sibling is interrupted instead of queued", async () => {
 		writer.streaming = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "ping", wait_for_reply: true });
+		await callTool(tool, { to: "writer", text: "ping" });
 	});
 
 	await spawn(harness, BOTH_TASKS);
@@ -248,7 +238,7 @@ test("a turn a message started is waited for before the call returns", async () 
 		writer.holdDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
+		await callTool(tool, { to: "writer", text: "extra work" });
 		// Release on a later macrotask; the call must still be waiting when it runs.
 		setTimeout(() => writer.releaseDelivery(), 0);
 	});
@@ -260,6 +250,26 @@ test("a turn a message started is waited for before the call returns", async () 
 	assert.equal(results[1]?.error, undefined);
 });
 
+test("a run's result is its latest utterance, not its first", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
+		if (input.agent.name !== "reviewer") return;
+		const writer = harness.runs.get("writer");
+		assert.ok(writer, "the sibling channel exists before any prompt runs");
+		const deliver = writer.channel.deliver;
+		writer.channel.deliver = async (text) => {
+			await deliver(text);
+			writer.output = `writer answered: ${text}`;
+		};
+		const tool = tools.find((candidate) => candidate.name === "message_agent");
+		assert.ok(tool);
+		await callTool(tool, { to: "writer", text: "final question" });
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.equal(results[1]?.output, "writer answered: final question");
+});
+
 test("a failed induced turn is reported on the run it happened in", async () => {
 	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
 		if (input.agent.name !== "reviewer") return;
@@ -268,7 +278,7 @@ test("a failed induced turn is reported on the run it happened in", async () => 
 		writer.failDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
+		await callTool(tool, { to: "writer", text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -284,12 +294,12 @@ test("an ambiguous agent name is refused and a run id resolves it", async () => 
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		try {
-			await callTool(tool, { to: "writer", text: "which one?", wait_for_reply: true });
+			await callTool(tool, { to: "writer", text: "which one?" });
 		} catch (error) {
 			failures.push(error instanceof Error ? error.message : String(error));
 		}
-		const reply = textOf(await callTool(tool, { to: "run-3", text: "you", wait_for_reply: true }));
-		assert.match(reply, /writer replied/);
+		const result = await callTool(tool, { to: "run-3", text: "you" });
+		assert.equal(textOf(result), "delivered");
 	});
 
 	// Two runs of the same agent in one call are the real source of ambiguity.
@@ -425,7 +435,7 @@ test("usage from a sibling-induced turn is included in the final result", async 
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		writer.usage = { input: 99, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 };
-		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
+		await callTool(tool, { to: "writer", text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);

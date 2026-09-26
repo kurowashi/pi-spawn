@@ -76,7 +76,7 @@
 `src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外
 です。ここは実モデルで確認します。
 
-1. 2エージェントを並列 spawn し、片方からもう片方へ `message_agent` で質問して返信が結果に現れること。
+1. 2エージェントを並列 spawn し、片方からの `message_agent` が相手の新しいターンを起こし、会話後の最新の発話が結果に現れること。
 2. `extensions: true` の agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
    呼び出しの終了後に MCP サーバーのプロセスが残っていないこと(`pgrep -f` などで確認)。
 3. 既定の子(`extensions` 無し)からは `spawn_agents` を呼べないこと。

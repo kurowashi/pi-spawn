@@ -26,6 +26,8 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * After ADR 0001 (resume): 329 tokens (spawn_agents 234, message_agent 95).
  *
  * After the description review: 343 tokens (spawn_agents 248, message_agent 95).
+ *
+ * After removing wait_for_reply: 319 tokens (spawn_agents 248, message_agent 71).
  */
 const TOKEN_BUDGET = 400;
 
@@ -36,10 +38,7 @@ function tokensOf(name: string, tool: ToolDefinition): number {
 }
 
 test("model-facing tool surface stays inside the token budget", async () => {
-	const tools = [
-		...(await loadSpawnTools()).values(),
-		...childTools({ runId: "t", self: {}, registry: createRunRegistry() }),
-	];
+	const tools = [...(await loadSpawnTools()).values(), ...childTools({ registry: createRunRegistry() })];
 
 	let total = 0;
 	const perTool: string[] = [];

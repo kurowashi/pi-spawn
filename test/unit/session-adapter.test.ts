@@ -1,12 +1,9 @@
 /**
  * Unit: the AgentSession adapter.
  *
- * The reply-capture path is the one piece of real logic between the SDK and this
+ * The adapter is the one piece of real logic between the SDK and this
  * extension, so it is tested against a fake session rather than left to the
  * integration tests, which cannot see event ordering.
- *
- * The reply timeout is intentionally not tested: it is a wall-clock constant,
- * and a test that sleeps for it would be worse than no test.
  */
 
 import assert from "node:assert/strict";
@@ -70,26 +67,6 @@ test("proxies every session operation", async () => {
 	await fake.channel.deliver("message");
 	await fake.channel.abort();
 	assert.deepEqual(fake.calls, ["prompt:task", "sendUserMessage:message:steer", "abort"]);
-});
-
-test("resolves the waiting run with the first assistant message", async () => {
-	const fake = makeFake();
-	const reply = fake.channel.nextAssistantText();
-
-	fake.emit({ type: "message_end", message: { role: "tool", content: "not a reply" } });
-	fake.emit({ type: "tool_execution_start", toolName: "read" });
-	fake.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "the answer" }] } });
-
-	assert.equal(await reply, "the answer");
-});
-
-test("stops listening once the reply arrived", async () => {
-	const fake = makeFake();
-	const reply = fake.channel.nextAssistantText();
-	fake.emit({ type: "message_end", message: { role: "assistant", content: "first" } });
-	assert.equal(await reply, "first");
-	// A second emission must not throw after the subscription was removed.
-	fake.emit({ type: "message_end", message: { role: "assistant", content: "second" } });
 });
 
 test("reads the last assistant text, skipping later tool traffic", () => {

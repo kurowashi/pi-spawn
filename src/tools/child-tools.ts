@@ -11,5 +11,5 @@ import { createMessageAgentTool } from "./message-agent.ts";
 
 /** The child tools in a stable order. */
 export function childTools(input: ChildToolInput): ToolDefinition[] {
-	return [createMessageAgentTool({ runId: input.runId, self: input.self, registry: input.registry })];
+	return [createMessageAgentTool({ registry: input.registry })];
 }

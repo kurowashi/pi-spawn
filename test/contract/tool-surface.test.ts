@@ -25,7 +25,7 @@ const MAX_TOP_LEVEL_PARAMETERS = 3;
 
 /** The child-facing surface, built exactly as spawn_agents builds it. */
 function childToolsForTest(): ToolDefinition[] {
-	return childTools({ runId: "test", self: {}, registry: createRunRegistry() });
+	return childTools({ registry: createRunRegistry() });
 }
 
 /** The subset of JSON Schema this contract reads from a TypeBox schema. */

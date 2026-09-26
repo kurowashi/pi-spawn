@@ -111,15 +111,8 @@ export interface CreateChannelInput {
 	resumeSessionFile?: string;
 }
 
-/** Mutable ref filled in immediately after the channel exists. */
-export interface SelfReference {
-	current?: RunHandle;
-}
-
 /** Everything the child-facing tools need for one run. */
 export interface ChildToolInput {
-	runId: string;
-	self: SelfReference;
 	registry: RunRegistry;
 }
 
@@ -229,14 +222,13 @@ async function startRuns(
 	const started: Array<{ run: PlannedRun; handle: RunHandle }> = [];
 	const outcomes = await Promise.allSettled(
 		planned.map(async (run) => {
-			const self: SelfReference = {};
 			const channel = await deps.createChannel({
 				runId: run.runId,
 				agent: run.definition,
 				cwd: run.cwd,
 				agentDir: deps.agentDir,
 				model: run.model,
-				customTools: deps.childTools({ runId: run.runId, self, registry: deps.registry }),
+				customTools: deps.childTools({ registry: deps.registry }),
 				...(request.context === "fork" && spawnContext.parentEntries !== undefined
 					? { forkEntries: spawnContext.parentEntries }
 					: {}),
@@ -248,12 +240,10 @@ async function startRuns(
 				runId: run.runId,
 				agent: run.definition.name,
 				channel,
-				hasInboundWait: false,
 				induced: new Set(),
 				inducedErrors: [],
 				usageBase: channel.snapshot().usage,
 			};
-			self.current = handle;
 			deps.registry.add(handle);
 			started.push({ run, handle });
 		}),
@@ -368,9 +358,19 @@ async function runWithHandle(entry: StartedRun): Promise<SettledRun> {
 	return { handle: entry.handle, result: await runOne(entry) };
 }
 
-/** The caller's view of one run: usage as of the end of the call plus any induced-turn failure. */
+/** The caller's view of one run: its latest output, usage, and any induced-turn failure. */
 function finalizeResult(entry: SettledRun, inducedErrors: readonly string[]): SpawnResult {
-	return withInducedErrors({ ...entry.result, ...snapshotFields(entry.handle) }, inducedErrors);
+	return withInducedErrors({ ...entry.result, ...latestOutput(entry), ...snapshotFields(entry.handle) }, inducedErrors);
+}
+
+/**
+ * The run's latest utterance. A sibling-induced turn may have produced text
+ * after the first prompt resolved, and that text is what the run concluded.
+ */
+function latestOutput(entry: SettledRun): Pick<SpawnResult, "output"> {
+	if (entry.result.error !== undefined) return {};
+	const text = entry.handle.channel.lastAssistantText();
+	return text === undefined ? {} : { output: text };
 }
 
 async function runOne(started: StartedRun): Promise<SpawnResult> {
@@ -427,9 +427,6 @@ export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]):
 /* ------------------------------------------------------------------ */
 /* Real child sessions                                                 */
 /* ------------------------------------------------------------------ */
-
-/** Wait budget for a sibling reply before the waiting run gives up. */
-const REPLY_TIMEOUT_MS = 120_000;
 
 /** Refresh interval for the parent's view of live runs. */
 const PROGRESS_INTERVAL_MS = 1000;
@@ -535,7 +532,6 @@ export function wrapSession(session: AgentSession): AgentChannel {
 				session.dispose();
 			}
 		},
-		nextAssistantText: () => waitForAssistantText(session),
 		lastAssistantText: () => lastAssistantText(session.messages),
 		snapshot: () => {
 			const sessionFile = session.sessionFile;
@@ -594,25 +590,6 @@ export function usageFromStats(stats: {
 		cacheWrite: stats.tokens.cacheWrite,
 		cost: stats.cost,
 	};
-}
-
-function waitForAssistantText(session: AgentSession): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const timer = setTimeout(() => {
-			unsubscribe();
-			reject(new Error(`no reply within ${REPLY_TIMEOUT_MS}ms`));
-		}, REPLY_TIMEOUT_MS);
-		timer.unref();
-
-		const unsubscribe = session.subscribe((event) => {
-			if (event.type !== "message_end") return;
-			const text = extractAssistantText(event.message);
-			if (text === undefined) return;
-			clearTimeout(timer);
-			unsubscribe();
-			resolve(text);
-		});
-	});
 }
 
 /** Text of the last assistant message in a transcript, or undefined when there is none. */

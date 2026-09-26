@@ -19,7 +19,6 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 	return {
 		runId,
 		agent,
-		hasInboundWait: false,
 		induced: new Set(),
 		inducedErrors: [],
 		usageBase: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
@@ -28,7 +27,6 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 			deliver: async () => {},
 			abort: async () => {},
 			dispose: async () => {},
-			nextAssistantText: () => Promise.resolve("pong"),
 			lastAssistantText: () => "done",
 			snapshot: () => ({ activity: "idle", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } }),
 			...channel,
@@ -44,40 +42,26 @@ async function call(tool: ToolDefinition, params: Record<string, unknown>): Prom
 	return tool.execute("test-call", params as never, undefined, undefined, TEST_CONTEXT);
 }
 
-function makeTool(self: RunHandle | undefined, targets: RunHandle[]): ToolDefinition {
+function makeTool(targets: RunHandle[]): ToolDefinition {
 	const registry = createRunRegistry();
 	for (const target of targets) registry.add(target);
-	return createMessageAgentTool({
-		runId: "self",
-		self: { ...(self === undefined ? {} : { current: self }) },
-		registry,
-	});
+	return createMessageAgentTool({ registry });
 }
 
-test("a fire-and-forget message reports delivery, not a reply", async () => {
+test("a message reports delivery, not a reply", async () => {
 	const sent: string[] = [];
 	const target = handle("bbb", "writer", { deliver: async (text) => void sent.push(text) });
-	const tool = makeTool(handle("aaa", "reviewer"), [target]);
+	const tool = makeTool([target]);
 
-	const result = await call(tool, { to: "writer", text: "status?", wait_for_reply: false });
+	const result = await call(tool, { to: "writer", text: "status?" });
 
 	assert.equal(textOf(result), "delivered");
 	assert.deepEqual(sent, ["status?"]);
-	assert.deepEqual(result.details, { to: "bbb", agent: "writer", replied: false });
-});
-
-test("wait returns the sibling reply to the caller", async () => {
-	const target = handle("bbb", "writer");
-	const tool = makeTool(handle("aaa", "reviewer"), [target]);
-
-	const result = await call(tool, { to: "bbb", text: "ready?", wait_for_reply: true });
-
-	assert.equal(textOf(result), "pong");
-	assert.deepEqual(result.details, { to: "bbb", agent: "writer", replied: true });
+	assert.deepEqual(result.details, { to: "bbb", agent: "writer" });
 });
 
 test("an ambiguous name lists the run ids to use instead", async () => {
-	const tool = makeTool(handle("aaa", "reviewer"), [handle("bbb", "writer"), handle("ccc", "writer")]);
+	const tool = makeTool([handle("bbb", "writer"), handle("ccc", "writer")]);
 
 	await assert.rejects(
 		() => call(tool, { to: "writer", text: "hi" }),
@@ -90,44 +74,37 @@ test("an ambiguous name lists the run ids to use instead", async () => {
 });
 
 test("an unknown target lists the live runs", async () => {
-	const tool = makeTool(handle("aaa", "reviewer"), [handle("bbb", "writer")]);
+	const tool = makeTool([handle("bbb", "writer")]);
 
 	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /writer \(bbb\)/);
 });
 
 test("an unknown target with nothing live says so", async () => {
-	const tool = makeTool(handle("aaa", "reviewer"), []);
+	const tool = makeTool([]);
 
 	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /\(none\)/);
 });
 
-test("a run that failed to register cannot send", async () => {
-	const tool = makeTool(undefined, [handle("bbb", "writer")]);
-
-	await assert.rejects(() => call(tool, { to: "writer", text: "hi" }), /not registered/);
-});
-
-test("a delivery failure reaches a waiting sender as a tool error", async () => {
+test("a synchronous delivery failure reaches the sender as a tool error", async () => {
 	const target = handle("bbb", "writer", {
-		deliver: async () => {
+		deliver: () => {
 			throw new Error("session is closed");
 		},
-		nextAssistantText: () => new Promise<string>(() => undefined),
 	});
-	const tool = makeTool(handle("aaa", "reviewer"), [target]);
+	const tool = makeTool([target]);
 
-	await assert.rejects(() => call(tool, { to: "writer", text: "hi", wait_for_reply: true }), /session is closed/);
+	await assert.rejects(() => call(tool, { to: "writer", text: "hi" }), /session is closed/);
 });
 
-test("a fire-and-forget failure is recorded on the target, not thrown", async () => {
+test("a failed turn is recorded on the target, not thrown to the sender", async () => {
 	const target = handle("bbb", "writer", {
 		deliver: async () => {
 			throw new Error("session is closed");
 		},
 	});
-	const tool = makeTool(handle("aaa", "reviewer"), [target]);
+	const tool = makeTool([target]);
 
-	const result = await call(tool, { to: "writer", text: "hi", wait_for_reply: false });
+	const result = await call(tool, { to: "writer", text: "hi" });
 
 	assert.equal(textOf(result), "delivered");
 	assert.deepEqual(target.inducedErrors, ["session is closed"]);
