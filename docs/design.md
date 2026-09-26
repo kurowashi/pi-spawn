@@ -61,7 +61,8 @@ message_agent({ to, text, wait? }) -> { reply?: string }
 - 各子のタスク先頭に「メッセージできる兄弟: 名前 (run id)」の1行を自動で付ける。
   run id は呼び出し後にしか決まらないため、これが無いと run id 指定は実質使えず、
   同じ agent を2回 spawn したときに区別できない。
-- 配送: 宛先が実行中なら `steer()`(次の安全点で現ターンに割り込み)、待機中なら `followUp()`。
+- 配送: `sendUserMessage({ deliverAs: "steer" })` の1経路。実行中なら次の安全点で現ターンに割り込み、
+  待機中なら新しいターンを開始する。配送が開始したターン(誘発ターン)の完了は `spawn_agents` が待つ。
 - `wait: true` は宛先の次のアシスタント発話を返り値にする。既定は `false`。
 - デッドロック防止: **1セッションにつき未解決の inbound wait は1つまで**。
   A→B→A を状態1ビットで不可能にする。
@@ -82,14 +83,14 @@ message_agent({ to, text, wait? }) -> { reply?: string }
 
 ## モジュール構成
 
-可変状態は `registry.ts` の1つだけ。依存は下向きのみ。
+可変状態は registry が保持する `RunHandle`(inbound wait と誘発ターン)のみ。依存は下向きのみ。
 
 ```
 src/index.ts        factory(配線のみ)
 src/catalog.ts      agent 定義の探索・frontmatter パース(純関数)
-src/registry.ts     run id / 名前 → セッションの表。唯一の可変状態
-src/spawn.ts        モデル解決、並列実行、SDK セッションの生成
-src/deliver.ts      配送モードと待機の排他(純関数中心)
+src/registry.ts     run id / 名前 → セッションの表。RunHandle を保持
+src/spawn.ts        モデル解決、並列実行、SDK セッションの生成、誘発ターンの完了待ち
+src/deliver.ts      配送と誘発ターンの追跡、待機の排他
 src/tools/          spawn_agents(親)と message_agent(子)
 ```
 

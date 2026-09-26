@@ -21,15 +21,14 @@ interface Fake {
 	emit(event: unknown): void;
 }
 
-function makeFake(options: { streaming?: boolean; messages?: unknown[] } = {}): Fake {
+function makeFake(options: { messages?: unknown[] } = {}): Fake {
 	const listeners = new Set<(event: unknown) => void>();
 	const calls: string[] = [];
 	const session = {
-		isStreaming: options.streaming ?? false,
 		messages: options.messages ?? [],
 		prompt: async (text: string) => void calls.push(`prompt:${text}`),
-		steer: async (text: string) => void calls.push(`steer:${text}`),
-		followUp: async (text: string) => void calls.push(`followUp:${text}`),
+		sendUserMessage: async (text: string, sendOptions?: { deliverAs?: string }) =>
+			void calls.push(`sendUserMessage:${text}:${sendOptions?.deliverAs}`),
 		abort: async () => void calls.push("abort"),
 		subscribe: (listener: (event: unknown) => void) => {
 			listeners.add(listener);
@@ -45,18 +44,12 @@ function makeFake(options: { streaming?: boolean; messages?: unknown[] } = {}): 
 	};
 }
 
-test("reports the session streaming state", () => {
-	assert.equal(makeFake({ streaming: true }).channel.isStreaming(), true);
-	assert.equal(makeFake({ streaming: false }).channel.isStreaming(), false);
-});
-
 test("proxies every session operation", async () => {
 	const fake = makeFake();
 	await fake.channel.prompt("task");
-	await fake.channel.steer("interrupt");
-	await fake.channel.followUp("queued");
+	await fake.channel.deliver("message");
 	await fake.channel.abort();
-	assert.deepEqual(fake.calls, ["prompt:task", "steer:interrupt", "followUp:queued", "abort"]);
+	assert.deepEqual(fake.calls, ["prompt:task", "sendUserMessage:message:steer", "abort"]);
 });
 
 test("resolves the waiting run with the first assistant message", async () => {

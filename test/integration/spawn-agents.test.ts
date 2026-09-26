@@ -23,13 +23,20 @@ import type { AgentChannel, SpawnResult } from "../../src/types.ts";
 
 interface FakeRun {
 	channel: AgentChannel;
-	/** Messages that interrupted a streaming run. */
+	/** Messages delivered while the run was streaming. */
 	steered: string[];
-	/** Messages queued for an idle run. */
+	/** Messages delivered while the run was idle, each starting a turn. */
 	queued: string[];
 	output: string;
 	streaming: boolean;
 	aborted: boolean;
+	/** When true, a delivered message's turn settles only after releaseDelivery(). */
+	holdDeliveries: boolean;
+	/** True once a held delivery turn settled. */
+	deliverySettled: boolean;
+	/** When true, every delivery fails. */
+	failDeliveries: boolean;
+	releaseDelivery(): void;
 	/** Set before prompt() runs to make it fail. */
 	failure?: string;
 	/** Task text as the run received it, including the sibling briefing. */
@@ -41,12 +48,20 @@ interface FakeRun {
 function createFakeRun(agent: string): FakeRun {
 	let abortPrompt: (() => void) | undefined;
 	let resolveReply: ((text: string) => void) | undefined;
+	let releaseDelivery: (() => void) | undefined;
 	const run: FakeRun = {
 		steered: [],
 		queued: [],
 		output: `${agent} finished`,
 		streaming: false,
 		aborted: false,
+		holdDeliveries: false,
+		deliverySettled: false,
+		failDeliveries: false,
+		releaseDelivery: () => {
+			releaseDelivery?.();
+			releaseDelivery = undefined;
+		},
 		received: [],
 		waitForAbort: () =>
 			new Promise<never>((_resolve, reject) => {
@@ -61,19 +76,23 @@ function createFakeRun(agent: string): FakeRun {
 	};
 
 	run.channel = {
-		isStreaming: () => run.streaming,
 		prompt: async () => {},
-		steer: async (text) => {
-			run.steered.push(text);
+		deliver: async (text) => {
+			if (run.streaming) run.steered.push(text);
+			else run.queued.push(text);
 			reply(text);
-		},
-		followUp: async (text) => {
-			run.queued.push(text);
-			reply(text);
+			if (run.failDeliveries) throw new Error("induced exploded");
+			if (run.holdDeliveries) {
+				await new Promise<void>((resolve) => {
+					releaseDelivery = resolve;
+				});
+				run.deliverySettled = true;
+			}
 		},
 		abort: async () => {
 			run.aborted = true;
 			abortPrompt?.();
+			run.releaseDelivery();
 		},
 		nextAssistantText: () => new Promise((resolve) => (resolveReply = resolve)),
 		lastAssistantText: () => run.output,
@@ -178,7 +197,7 @@ test("a run asks a sibling and returns the reply", async () => {
 	);
 	assert.equal(results[0]?.error, undefined);
 	assert.match(results[0]?.output ?? "", /writer replied to "is the draft ready\?"/);
-	assert.deepEqual(harness.runs.get("writer")?.queued, ["is the draft ready?"], "an idle sibling is queued");
+	assert.deepEqual(harness.runs.get("writer")?.queued, ["is the draft ready?"], "an idle sibling gets a new turn");
 	assert.deepEqual(harness.runs.get("writer")?.steered, []);
 });
 
@@ -197,6 +216,43 @@ test("a streaming sibling is interrupted instead of queued", async () => {
 
 	assert.deepEqual(harness.runs.get("writer")?.steered, ["ping"]);
 	assert.deepEqual(harness.runs.get("writer")?.queued, []);
+});
+
+test("a turn a message started is waited for before the call returns", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
+		if (input.agent.name !== "reviewer") return;
+		const writer = harness.runs.get("writer");
+		assert.ok(writer);
+		writer.holdDeliveries = true;
+		const tool = tools.find((candidate) => candidate.name === "message_agent");
+		assert.ok(tool);
+		await callTool(tool, { to: "writer", text: "extra work", wait: false });
+		// Release on a later macrotask; the call must still be waiting when it runs.
+		setTimeout(() => writer.releaseDelivery(), 0);
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.equal(harness.runs.get("writer")?.deliverySettled, true, "the induced turn settled inside the call");
+	assert.equal(results[1]?.output, "writer finished", "the initial turn's output is kept");
+	assert.equal(results[1]?.error, undefined);
+});
+
+test("a failed induced turn is reported on the run it happened in", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
+		if (input.agent.name !== "reviewer") return;
+		const writer = harness.runs.get("writer");
+		assert.ok(writer);
+		writer.failDeliveries = true;
+		const tool = tools.find((candidate) => candidate.name === "message_agent");
+		assert.ok(tool);
+		await callTool(tool, { to: "writer", text: "extra work", wait: false });
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.equal(results[0]?.error, undefined, "the sender is not punished for a fire-and-forget failure");
+	assert.match(results[1]?.output ?? "", /delivery turn failed: induced exploded/);
 });
 
 test("an ambiguous agent name is refused and a run id resolves it", async () => {

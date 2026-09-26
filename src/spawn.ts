@@ -174,7 +174,14 @@ export async function spawnAgents(
 					? { forkEntries: spawnContext.parentEntries }
 					: {}),
 			});
-			const handle: RunHandle = { runId: run.runId, agent: run.definition.name, channel, hasInboundWait: false };
+			const handle: RunHandle = {
+				runId: run.runId,
+				agent: run.definition.name,
+				channel,
+				hasInboundWait: false,
+				induced: new Set(),
+				inducedErrors: [],
+			};
 			self.current = handle;
 			deps.registry.add(handle);
 			return { run, handle };
@@ -184,6 +191,8 @@ export async function spawnAgents(
 	const abortChildren = (): void => {
 		for (const { handle } of started) void handle.channel.abort();
 	};
+	// One deadline for the whole call: induced turns are work this call caused too.
+	const timer = request.timeoutMs === undefined ? undefined : setTimeout(abortChildren, request.timeoutMs);
 	spawnContext.signal?.addEventListener("abort", abortChildren, { once: true });
 
 	try {
@@ -194,11 +203,33 @@ export async function spawnAgents(
 				started.map((candidate) => candidate.handle),
 			),
 		}));
-		return await Promise.all(briefed.map((entry) => runOne(entry, entry.handle, request.timeoutMs)));
+		const results = await Promise.all(briefed.map((entry) => runOne(entry)));
+		await settleInduced(started.map(({ handle }) => handle));
+		const errorsByRun = new Map(started.map(({ handle }) => [handle.runId, handle.inducedErrors] as const));
+		return results.map((result) => withInducedErrors(result, errorsByRun.get(result.run_id) ?? []));
 	} finally {
+		if (timer !== undefined) clearTimeout(timer);
 		spawnContext.signal?.removeEventListener("abort", abortChildren);
 		for (const { handle } of started) deps.registry.remove(handle.runId);
 	}
+}
+
+/** Wait for every turn a sibling message started, so no child work outlives the call. */
+async function settleInduced(handles: readonly RunHandle[]): Promise<void> {
+	for (;;) {
+		const pending = handles.flatMap((handle) => [...handle.induced]);
+		if (pending.length === 0) return;
+		await Promise.allSettled(pending);
+	}
+}
+
+/** Attach induced-turn failures to the run they happened in; failures are labeled, never dropped. */
+function withInducedErrors(result: SpawnResult, errors: readonly string[]): SpawnResult {
+	if (errors.length === 0) return result;
+	const labeled = errors.map((error) => `delivery turn failed: ${error}`);
+	if (result.error !== undefined) return { ...result, error: [result.error, ...labeled].join("; ") };
+	const output = result.output ?? "";
+	return { ...result, output: output.length > 0 ? `${output}\n\n${labeled.join("\n")}` : labeled.join("\n") };
 }
 
 /** Resolve definition and model before anything starts. */
@@ -222,17 +253,14 @@ function findDefinition(name: string, agentDir: string): AgentDefinition {
 	throw new Error(`unknown agent '${name}'. Defined agents: ${known.length > 0 ? known : "(none)"}`);
 }
 
-async function runOne(started: StartedRun, handle: RunHandle, timeoutMs: number | undefined): Promise<SpawnResult> {
-	const { run, briefing } = started;
+async function runOne(started: StartedRun): Promise<SpawnResult> {
+	const { run, handle, briefing } = started;
 	const identity = { agent: run.definition.name, run_id: run.runId, model: `${run.model.provider}/${run.model.id}` };
-	const timer = timeoutMs === undefined ? undefined : setTimeout(() => void handle.channel.abort(), timeoutMs);
 	try {
 		await handle.channel.prompt(`${briefing}${run.task.task}`);
 		return { ...identity, output: handle.channel.lastAssistantText() ?? "" };
 	} catch (error) {
 		return { ...identity, error: error instanceof Error ? error.message : String(error) };
-	} finally {
-		if (timer !== undefined) clearTimeout(timer);
 	}
 }
 
@@ -323,15 +351,12 @@ export function selectActiveTools(
 /** Adapt AgentSession to the narrow channel this extension depends on. */
 export function wrapSession(session: AgentSession): AgentChannel {
 	return {
-		isStreaming: () => session.isStreaming,
 		prompt: async (text) => {
 			await session.prompt(text);
 		},
-		steer: async (text) => {
-			await session.steer(text);
-		},
-		followUp: async (text) => {
-			await session.followUp(text);
+		deliver: async (text) => {
+			// The SDK decides turn-vs-queue here: idle starts a turn, running steers.
+			await session.sendUserMessage(text, { deliverAs: "steer" });
 		},
 		abort: async () => {
 			await session.abort();

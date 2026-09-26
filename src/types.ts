@@ -51,13 +51,14 @@ export interface SpawnResult {
  * visible in one file.
  */
 export interface AgentChannel {
-	isStreaming(): boolean;
 	/** Run one turn to completion. Resolves when the child is idle again. */
 	prompt(text: string): Promise<void>;
-	/** Interrupt the current turn at the next safe point. */
-	steer(text: string): Promise<void>;
-	/** Queue for the next turn boundary. */
-	followUp(text: string): Promise<void>;
+	/**
+	 * Deliver a sibling message as a user turn: starts a turn when the child is
+	 * idle, interrupts at the next safe point when it is already running.
+	 * Resolves when that turn (or the queueing) is complete.
+	 */
+	deliver(text: string): Promise<void>;
 	abort(): Promise<void>;
 	/** Resolves with the text of the next assistant message. */
 	nextAssistantText(): Promise<string>;
@@ -72,7 +73,8 @@ export interface RunHandle {
 	channel: AgentChannel;
 	/** True while a sibling is blocked waiting for this run's reply. */
 	hasInboundWait: boolean;
+	/** Turns a sibling message started; the spawn call owns their completion. */
+	induced: Set<Promise<void>>;
+	/** Failures from induced turns, reported on this run's result. */
+	inducedErrors: string[];
 }
-
-/** How the receiving run consumes a message. */
-export type DeliveryMode = "steer" | "followUp";

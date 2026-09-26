@@ -1,10 +1,10 @@
 /**
- * Unit: sibling addressing and the delivery/deadlock rules.
+ * Unit: sibling addressing, delivery, and the wait rules.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { deliverMessage, deliveryMode, waitRefusal } from "../../src/deliver.ts";
+import { deliverMessage, waitRefusal } from "../../src/deliver.ts";
 import { createRunRegistry, resolveTarget } from "../../src/registry.ts";
 import type { AgentChannel, RunHandle } from "../../src/types.ts";
 
@@ -13,11 +13,11 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 		runId,
 		agent,
 		hasInboundWait: false,
+		induced: new Set(),
+		inducedErrors: [],
 		channel: {
-			isStreaming: () => false,
 			prompt: async () => {},
-			steer: async () => {},
-			followUp: async () => {},
+			deliver: async () => {},
 			abort: async () => {},
 			nextAssistantText: () => Promise.resolve("reply"),
 			lastAssistantText: () => "output",
@@ -57,11 +57,6 @@ test("the registry only exposes live runs", () => {
 	assert.equal(registry.resolve("aaa").ok, false);
 });
 
-test("delivery mode follows the recipient state", () => {
-	assert.equal(deliveryMode(true), "steer");
-	assert.equal(deliveryMode(false), "followUp");
-});
-
 test("a run cannot wait on itself or on a busy recipient", () => {
 	const self = handle("aaa", "reviewer");
 	assert.ok(waitRefusal(self, self)?.includes("itself"));
@@ -74,37 +69,60 @@ test("a run cannot wait on itself or on a busy recipient", () => {
 	assert.equal(waitRefusal(self, free), undefined);
 });
 
-test("fire-and-forget does not touch the reply path", async () => {
+test("delivery always uses the one primitive, whatever the recipient is doing", async () => {
 	const calls: string[] = [];
+	const target = handle("bbb", "writer", { deliver: async (text) => void calls.push(`deliver:${text}`) });
+	await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: false });
+	assert.deepEqual(calls, ["deliver:hi"]);
+});
+
+test("fire-and-forget returns before the turn it started settles", async () => {
+	let settle!: () => void;
+	const turn = new Promise<void>((resolve) => {
+		settle = resolve;
+	});
 	const target = handle("bbb", "writer", {
-		isStreaming: () => true,
-		steer: async (text) => {
-			calls.push(`steer:${text}`);
-		},
+		deliver: () => turn,
 		nextAssistantText: () => Promise.reject(new Error("must not be called")),
 	});
 	const outcome = await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: false });
 	assert.deepEqual(outcome, { delivered: true });
-	assert.deepEqual(calls, ["steer:hi"]);
+	assert.equal(target.induced.size, 1, "the turn is tracked for the spawn call");
+	settle();
+	await turn;
 });
 
-test("an idle recipient is queued instead of interrupted", async () => {
-	const calls: string[] = [];
+test("wait returns the reply, not the end of the turn", async () => {
 	const target = handle("bbb", "writer", {
-		isStreaming: () => false,
-		followUp: async (text) => {
-			calls.push(`followUp:${text}`);
-		},
+		deliver: () => new Promise<void>(() => undefined),
+		nextAssistantText: () => Promise.resolve("pong"),
 	});
-	await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: false });
-	assert.deepEqual(calls, ["followUp:hi"]);
-});
-
-test("wait returns the recipient reply and clears the inbound flag", async () => {
-	const target = handle("bbb", "writer", { nextAssistantText: () => Promise.resolve("pong") });
 	const outcome = await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "ping", wait: true });
 	assert.deepEqual(outcome, { delivered: true, reply: "pong" });
 	assert.equal(target.hasInboundWait, false);
+});
+
+test("a delivery that fails before the reply is reported to the waiter", async () => {
+	const target = handle("bbb", "writer", {
+		deliver: async () => {
+			throw new Error("session is closed");
+		},
+		nextAssistantText: () => new Promise<string>(() => undefined),
+	});
+	const outcome = await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: true });
+	assert.deepEqual(outcome, { delivered: false, error: "session is closed" });
+	assert.equal(target.hasInboundWait, false);
+});
+
+test("a failed turn started without waiting is recorded on the target", async () => {
+	const target = handle("bbb", "writer", {
+		deliver: async () => {
+			throw new Error("session is closed");
+		},
+	});
+	const outcome = await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: false });
+	assert.deepEqual(outcome, { delivered: true });
+	assert.deepEqual(target.inducedErrors, ["session is closed"]);
 });
 
 test("wait is refused while the target is already answering, and the flag is left alone", async () => {
@@ -114,16 +132,6 @@ test("wait is refused while the target is already answering, and the flag is lef
 	assert.equal(outcome.delivered, false);
 	assert.ok(!outcome.delivered && outcome.error.includes("already answering"));
 	assert.equal(target.hasInboundWait, true, "a refused wait must not steal a flag it never set");
-});
-
-test("a failing delivery is reported, not thrown", async () => {
-	const target = handle("bbb", "writer", {
-		followUp: async () => {
-			throw new Error("session is closed");
-		},
-	});
-	const outcome = await deliverMessage({ waiter: handle("aaa", "reviewer"), target, text: "hi", wait: false });
-	assert.deepEqual(outcome, { delivered: false, error: "session is closed" });
 });
 
 test("a failing reply clears the inbound flag", async () => {

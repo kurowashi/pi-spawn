@@ -1,22 +1,18 @@
 /**
  * Message delivery between sibling runs.
  *
- * An idle recipient queues the message for its next turn boundary; a streaming
- * recipient is interrupted at its next safe point. This is the pair Pi's
- * session API offers, and it avoids the documented weakness of delivering only
- * at turn boundaries.
+ * One primitive covers both recipient states: `AgentChannel.deliver` starts a
+ * turn when the child is idle and interrupts it at the next safe point when it
+ * is already running. The sender waits only for the reply; the turn a message
+ * starts is tracked on the recipient so the spawn call owns its completion.
  *
  * Deadlock guard: a run may not wait on a sibling while a sibling is waiting on
  * it. The rule needs one bit per run and makes every wait cycle impossible.
  */
 
-import type { DeliveryMode, RunHandle } from "./types.ts";
+import type { RunHandle } from "./types.ts";
 
 export type DeliverOutcome = { delivered: true; reply?: string } | { delivered: false; error: string };
-
-export function deliveryMode(isStreaming: boolean): DeliveryMode {
-	return isStreaming ? "steer" : "followUp";
-}
 
 /** Reason a wait must be refused, or undefined when it is safe. */
 export function waitRefusal(waiter: RunHandle, target: RunHandle): string | undefined {
@@ -50,15 +46,43 @@ export async function deliverMessage(request: DeliverRequest): Promise<DeliverOu
 	try {
 		// Subscribe before delivering so a fast reply cannot be missed.
 		const replyPromise = wait ? target.channel.nextAssistantText() : undefined;
-		const mode = deliveryMode(target.channel.isStreaming());
-		if (mode === "steer") await target.channel.steer(text);
-		else await target.channel.followUp(text);
-
+		const delivery = startDelivery(target, text);
 		if (replyPromise === undefined) return { delivered: true };
-		return { delivered: true, reply: await replyPromise };
+		return { delivered: true, reply: await Promise.race([replyPromise, startedTurnFailure(delivery)]) };
 	} catch (error) {
-		return { delivered: false, error: error instanceof Error ? error.message : String(error) };
+		return { delivered: false, error: describe(error) };
 	} finally {
 		if (wait) target.hasInboundWait = false;
 	}
+}
+
+/**
+ * Send the message and remember the turn it may start, so `spawnAgents` waits
+ * for work this call caused even after the sender has moved on.
+ */
+function startDelivery(target: RunHandle, text: string): Promise<void> {
+	const delivery = target.channel.deliver(text);
+	const tracked = delivery.then(
+		() => {},
+		(error: unknown) => {
+			target.inducedErrors.push(describe(error));
+		},
+	);
+	target.induced.add(tracked);
+	void tracked.finally(() => target.induced.delete(tracked));
+	return delivery;
+}
+
+/** Rejects when the delivery fails; a delivery that succeeds never settles this arm. */
+function startedTurnFailure(delivery: Promise<void>): Promise<never> {
+	return delivery.then(
+		() => new Promise<never>(() => undefined),
+		(error: unknown) => {
+			throw error;
+		},
+	);
+}
+
+function describe(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

@@ -20,11 +20,11 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 		runId,
 		agent,
 		hasInboundWait: false,
+		induced: new Set(),
+		inducedErrors: [],
 		channel: {
-			isStreaming: () => false,
 			prompt: async () => {},
-			steer: async () => {},
-			followUp: async () => {},
+			deliver: async () => {},
 			abort: async () => {},
 			nextAssistantText: () => Promise.resolve("pong"),
 			lastAssistantText: () => "done",
@@ -53,7 +53,7 @@ function makeTool(self: RunHandle | undefined, targets: RunHandle[]): ToolDefini
 
 test("a fire-and-forget message reports delivery, not a reply", async () => {
 	const sent: string[] = [];
-	const target = handle("bbb", "writer", { followUp: async (text) => void sent.push(text) });
+	const target = handle("bbb", "writer", { deliver: async (text) => void sent.push(text) });
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
 	const result = await call(tool, { to: "writer", text: "status?", wait: false });
@@ -104,13 +104,28 @@ test("a run that failed to register cannot send", async () => {
 	await assert.rejects(() => call(tool, { to: "writer", text: "hi" }), /not registered/);
 });
 
-test("a delivery failure surfaces as a tool error", async () => {
+test("a delivery failure reaches a waiting sender as a tool error", async () => {
 	const target = handle("bbb", "writer", {
-		followUp: async () => {
+		deliver: async () => {
+			throw new Error("session is closed");
+		},
+		nextAssistantText: () => new Promise<string>(() => undefined),
+	});
+	const tool = makeTool(handle("aaa", "reviewer"), [target]);
+
+	await assert.rejects(() => call(tool, { to: "writer", text: "hi", wait: true }), /session is closed/);
+});
+
+test("a fire-and-forget failure is recorded on the target, not thrown", async () => {
+	const target = handle("bbb", "writer", {
+		deliver: async () => {
 			throw new Error("session is closed");
 		},
 	});
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
-	await assert.rejects(() => call(tool, { to: "writer", text: "hi" }), /session is closed/);
+	const result = await call(tool, { to: "writer", text: "hi", wait: false });
+
+	assert.equal(textOf(result), "delivered");
+	assert.deepEqual(target.inducedErrors, ["session is closed"]);
 });
