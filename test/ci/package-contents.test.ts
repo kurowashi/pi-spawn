@@ -29,7 +29,7 @@ test("npm pack ships src and package metadata only", () => {
 	assert.ok(result, "npm pack --dry-run --json must report one package");
 
 	const shipped = result.files.map((file) => file.path);
-	const allowed = new Set(["package.json", "README.md"]);
+	const allowed = new Set(["package.json", "README.md", "LICENSE"]);
 	const unexpected = shipped.filter((path) => !allowed.has(path) && !path.startsWith("src/"));
 
 	assert.deepEqual(unexpected, [], "only src and package metadata may be published");
