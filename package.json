@@ -40,7 +40,6 @@
 		"fix": "biome check --write .",
 		"test": "node --test \"test/**/*.test.ts\"",
 		"test:coverage": "node --test --experimental-test-coverage --test-coverage-lines=85 --test-coverage-branches=80 --test-coverage-functions=80 \"test/unit/**/*.test.ts\" \"test/integration/**/*.test.ts\"",
-		"verify": "npm run check && npm test && npm run test:coverage",
-		"postinstall": "lefthook install"
+		"verify": "npm run check && npm test && npm run test:coverage"
 	}
 }

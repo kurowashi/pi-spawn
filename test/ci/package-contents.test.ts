@@ -6,8 +6,9 @@
  * package ships TypeScript source and runs no build step.
  *
  * `--ignore-scripts` keeps lifecycle hooks out of the output so the JSON stays
- * parseable and the check stays side-effect free. Hook installation lives on
- * `postinstall`, which `npm pack` never runs.
+ * parseable and the check stays side-effect free. The package ships no
+ * lifecycle scripts: git installs run `npm install --omit=dev`, where hook
+ * installation would fail because devDependencies are absent.
  */
 
 import assert from "node:assert/strict";

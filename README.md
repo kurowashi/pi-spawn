@@ -17,16 +17,23 @@ Pi の子エージェントを spawn し、**兄弟エージェント同士が�
 
 ## インストール
 
-`~/.pi/agent/settings.json` の `packages` に、**その settings.json からの相対パス**で追加する:
+GitHub から入れる:
+
+```bash
+pi install git:github.com/kurowashi/pi-spawn
+```
+
+ref を固定する場合は `pi install git:github.com/kurowashi/pi-spawn@<tag|commit>`。追加後は Pi の
+再起動で読み込まれ、`pi list` に現れる。
+
+ローカルの作業コピーを使う場合は `~/.pi/agent/settings.json` の `packages` に、**その
+settings.json からの相対パス**で追加する:
 
 ```json
 {
 	"packages": ["../../pi-plugins/pi-spawn"]
 }
 ```
-
-npm には公開していないため、これはローカル開発用の指定。追加後は Pi の再起動で読み込まれ、
-`pi list` に現れる。
 
 ## 使い方
 
@@ -125,6 +132,10 @@ npm run fix          # 自動修正
 
 コミット前に lefthook が format/lint/型検査を実行する。CI は同じ検査を独立に実行する
 (フックは利便性のためのもので、ゲートの権威ではない)。
+
+フックの有効化は `npx lefthook install` を手動で実行する。`package.json` の lifecycle script
+(`prepare` / `postinstall`) には置かない: `pi install git:...` は `npm install --omit=dev` を
+実行するため、devDependency の lefthook が無い状態で script が走るとインストールごと失敗する。
 
 `test:coverage` が `test/unit` と `test/integration` に限定されているのは、契約テストが
 jiti 経由で `src` をもう一度ロードするため。同じファイルが2つのモジュール実体として数えられ、
