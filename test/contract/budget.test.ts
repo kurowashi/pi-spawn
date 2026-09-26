@@ -66,6 +66,7 @@ test("the injected agent catalog stays inside its own budget", async () => {
 		body: "",
 		inheritProjectContext: true,
 		inheritSkills: true,
+		extensions: false,
 		systemPromptMode: "append" as const,
 		path: "p",
 	}));

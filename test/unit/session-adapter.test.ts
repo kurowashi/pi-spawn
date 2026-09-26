@@ -21,7 +21,7 @@ interface Fake {
 	emit(event: unknown): void;
 }
 
-function makeFake(options: { messages?: unknown[] } = {}): Fake {
+function makeFake(options: { messages?: unknown[]; shutdownError?: string } = {}): Fake {
 	const listeners = new Set<(event: unknown) => void>();
 	const calls: string[] = [];
 	const session = {
@@ -30,6 +30,13 @@ function makeFake(options: { messages?: unknown[] } = {}): Fake {
 		sendUserMessage: async (text: string, sendOptions?: { deliverAs?: string }) =>
 			void calls.push(`sendUserMessage:${text}:${sendOptions?.deliverAs}`),
 		abort: async () => void calls.push("abort"),
+		extensionRunner: {
+			emit: async (event: { type: string }) => {
+				calls.push(`emit:${event.type}`);
+				if (options.shutdownError !== undefined) throw new Error(options.shutdownError);
+			},
+		},
+		dispose: () => void calls.push("dispose"),
 		subscribe: (listener: (event: unknown) => void) => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
@@ -86,4 +93,16 @@ test("reads the last assistant text, skipping later tool traffic", () => {
 test("has no last assistant text before the first turn", () => {
 	assert.equal(makeFake({ messages: [{ role: "user", content: "hi" }] }).channel.lastAssistantText(), undefined);
 	assert.equal(makeFake().channel.lastAssistantText(), undefined);
+});
+
+test("dispose emits session_shutdown before releasing the session", async () => {
+	const fake = makeFake();
+	await fake.channel.dispose();
+	assert.deepEqual(fake.calls, ["emit:session_shutdown", "dispose"]);
+});
+
+test("releases the session even when a shutdown handler fails", async () => {
+	const fake = makeFake({ shutdownError: "handler exploded" });
+	await assert.rejects(() => fake.channel.dispose(), /handler exploded/);
+	assert.ok(fake.calls.includes("dispose"));
 });

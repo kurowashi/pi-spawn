@@ -6,7 +6,7 @@ Pi の子エージェントを spawn し、**兄弟エージェント同士が�
 - モデルに見せるツール面は 308 トークン(計測方法は [docs/foundation.md](docs/foundation.md) の「計測方法」)
 - 子セッションは同一プロセス内。非同期実行(親が結果を待たずに制御を戻す起動)・別プロセス runner・
   run status ファイルを持たない
-- 子は子を spawn できない(委譲の深さは 1 に固定)
+- 既定の子は子を spawn できない(委譲の深さは 1)。定義に `extensions: true` を書いた子だけが、拡張と一緒に `spawn_agents` を受け取る
 
 ## 動作条件
 
@@ -63,7 +63,8 @@ spawn_agents({
 | 文脈の選択 | `fresh`(空の文脈で開始、既定)または `fork`(この会話をコピーして開始) |
 | モデル指定 | 優先順は `tasks[].model` → 定義の `model` → 親セッションのモデル。**実際に使われたモデルは結果に必ず入る** |
 | 推論強度 | 定義の `thinking`(off / minimal / low / medium / high / xhigh / max) |
-| ツール制限 | 定義の `tools` に列挙したものだけ。子は spawn 系ツールを受け取らない |
+| ツール制限 | 定義の `tools` に列挙したものと、実際に利用可能なツールの交差。`tools` が無ければ利用可能な全ツール。子に渡す `message_agent` は常に残る |
+| 子への拡張 | 定義に `extensions: true` を書いた子は、グローバル設定の `packages` にある拡張(MCP など)をロードする。既定 false。次の階層に委譲するには、その agent の定義にも `extensions: true` が要る(ADR 0006) |
 | タイムアウト | `timeout_ms` を過ぎたら全子を中断し、結果にエラーを返す |
 | 既存定義の再利用 | `~/.pi/agent/agents/*.md` を読む。対応キーのみ有効で、未知キーは警告して無視する |
 | 利用可能なエージェントの把握 | 一覧と説明がシステムプロンプトに1行で注入される |
@@ -87,7 +88,6 @@ spawn_agents({
 | 受け入れゲート・検証証跡 | 親が検証する |
 | コスト・spawn 上限の統制 | Pi 本体のセッション統計 |
 | mission・定期実行・watchdog | なし |
-| 子への MCP ツール・外部 CLI | 親が使う。子は read / bash / edit / write と `message_agent` のみ |
 | 子セッションの永続化 | 必要な内容は結果に含めさせる |
 
 「バックグラウンド実行」と「子→親の質問」は、同期 spawn では親のモデルターンが停止しているため
@@ -108,6 +108,7 @@ spawn_agents({
 | `systemPromptMode` | `append`(既定、Pi のプロンプトに本文を追加)/ `replace`(本文のみ) |
 | `inheritProjectContext` | AGENTS.md を子に渡すか(既定 true) |
 | `inheritSkills` | skills を子に渡すか(既定 true) |
+| `extensions` | 子セッションでグローバル設定の `packages`(拡張)をロードするか(既定 false)。true にすると MCP ツールや `spawn_agents` も利用可能になり、`tools` で絞り込める。多段委譲は階層ごとに true が必要(ADR 0006) |
 
 未知のキー(`async` や `fallbacks` など)は警告して無視する。**対応キーだけが有効**であり、
 定義ファイルが読めることと全設定が反映されることは別である。

@@ -30,7 +30,7 @@ pi-spawn 列だけが太字なのは、これが比較の基準列だからで�
 | 中断・停止 | ○ | ○ | ○ | ○ `stop` / interrupt | **×** タイムアウトのみ |
 | 実行中への追加指示(steering) | △ SendMessage | ○ | △ | ○ `steer`(3モード) | **×**(同期 spawn では送る時点が無い) |
 | 再開・再起動(resume) | ○ セッション resume | ○ スレッド継続 | ○ `task_id` | ○ resume / revive / retained children | **×** |
-| 子による孫 spawn(深さ) | △ 1 セッション内 | ○ `max_depth` 既定 **1** | △ `permission.task` で制御 | ○ `maxSubagentDepth` 既定 2 | **×**(構造で 1 固定) |
+| 子による孫 spawn(深さ) | △ 1 セッション内 | ○ `max_depth` 既定 **1** | △ `permission.task` で制御 | ○ `maxSubagentDepth` 既定 2 | **△**(既定は深さ1。`extensions: true` の子は可、ADR 0006) |
 | 同時実行数の上限 | △ | ○ `max_threads` | △ | ○ 各種上限 / grant | **×**(1呼び出し 8 件が事実上の上限) |
 | 実行タイムアウト | ○ | ○ `job_max_runtime_seconds` 既定 1800 | △ | ○ `timeoutMs` / toolTimeoutMs / checkpoint | **○ `timeout_ms`** |
 | 別マシン・別プロセス実行 | △ agent view / Remote | – | – | ○ 別プロセス runner / Herdr 保存マシン | **×**(同一プロセス固定) |
@@ -104,7 +104,7 @@ pi-spawn 列だけが太字なのは、これが比較の基準列だからで�
 | スケジュール実行 | × | × | × | ○ `schedule.*`(cron 風) | **×** |
 | worktree 分離 | × | ○ Codex app のワーキングツリー(スレッド/自動化を別 worktree で実行) | × | ○ `worktree` / lane / merge 記録 | **×** |
 | 他拡張からの操作(RPC) | △ SDK | – | – | ○ `pi-subagents/rpc` + extension API | **×** |
-| MCP ツールを子に渡す | ○ | ○ | ○ | ○(pi-mcp-adapter 経由・条件付き) | **×**(子は組み込み + `message_agent` のみ) |
+| MCP ツールを子に渡す | ○ | ○ | ○ | ○(pi-mcp-adapter 経由・条件付き) | **△**(定義の `extensions: true` で opt-in) |
 | 外部 CLI を子として実行 | – | – | – | ○ claude-code / codex-exec / cursor-agent | **×** |
 | 子セッションの永続化・resume | ○ | ○ | ○ | ○ session file | **×**(in-memory) |
 | 対話のみの補助(遅延ロード・説明文モード) | – | – | – | ○ `subagents_enable` / toolDescriptionMode | **×**(不要な大きさではない) |
@@ -117,6 +117,7 @@ pi-spawn 列だけが太字なのは、これが比較の基準列だからで�
 - fresh / fork 文脈、プロジェクト文脈・skills 継承、定義の `tools` 制限
 - モデル解決(task → 定義 → 親)と thinking。解決結果を必ず結果に含める
 - エージェント定義の互換(既存ファイルを無修正で使える)
+- 子への拡張・MCP ツールの受け渡し(定義の `extensions: true` で opt-in、ADR 0006)
 - **兄弟間の直接メッセージと返信待ち**(pi-subagents に無い)
 - 兄弟宛メッセージの実行中配送(steer)。Claude Code の「ターン終了時のみ」に対する差分。
   親から実行中の子への steering は提供しない(送る時点が無い)
@@ -138,7 +139,7 @@ pi-spawn 列だけが太字なのは、これが比較の基準列だからで�
 | mission / schedule | 作業台帳・定期実行が無い | なし |
 | fleet UI / トランスクリプト閲覧 / inspector | 子の様子が見えない(結果だけ) | 無し。子の出力を結果に含めさせる |
 | 永続セッション | 子の会話は残らない | 必要な内容は結果に含めさせる |
-| MCP ツール・外部 CLI の子 | 子は read/bash/edit/write + メッセージのみ | 親が MCP を使う |
+| 外部 CLI の子 | pi-subagents のように claude-code / codex-exec を子として起動できない | 親の bash から起動する |
 | RPC / 他拡張連携 | 外から操作できない | なし |
 
 ### 保留(追加する候補と条件)
@@ -148,7 +149,7 @@ pi-spawn 列だけが太字なのは、これが比較の基準列だからで�
 - **in-process のバックグラウンド子**: 非同期 spawn と同じだが別プロセス runner を持たない。
   モデル解決は1経路のまま、子 → 親の質問と親 → 子 steering が成立する。
   条件: 「親を待たせたい」または「子が判断を仰ぎたい」需要が実運用で確認されたとき。
-- **兄弟の broadcast、共有タスクリスト、子の永続セッション化、子への MCP ツール受け渡し**:
+- **兄弟の broadcast、共有タスクリスト、子の永続セッション化**:
   いずれも現在は非目標。条件: 並列 spawn を常用するようになり、都度のタスク文への記載では
   足りなくなったとき。
 

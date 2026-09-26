@@ -23,6 +23,8 @@ export interface AgentDefinition {
 	systemPromptMode: "append" | "replace";
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	/** Load the configured extensions inside the child session (default false). */
+	extensions: boolean;
 	path: string;
 }
 
@@ -60,6 +62,11 @@ export interface AgentChannel {
 	 */
 	deliver(text: string): Promise<void>;
 	abort(): Promise<void>;
+	/**
+	 * End the child session: emit `session_shutdown` so extensions release their
+	 * resources, then dispose the session itself.
+	 */
+	dispose(): Promise<void>;
 	/** Resolves with the text of the next assistant message. */
 	nextAssistantText(): Promise<string>;
 	/** Text of the last assistant message, or undefined when there is none. */

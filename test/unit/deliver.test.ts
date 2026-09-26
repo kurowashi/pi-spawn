@@ -19,6 +19,7 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 			prompt: async () => {},
 			deliver: async () => {},
 			abort: async () => {},
+			dispose: async () => {},
 			nextAssistantText: () => Promise.resolve("reply"),
 			lastAssistantText: () => "output",
 			...channel,

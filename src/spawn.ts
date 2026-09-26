@@ -160,33 +160,7 @@ export async function spawnAgents(
 ): Promise<SpawnResult[]> {
 	const planned = request.tasks.map((task) => planRun(task, spawnContext.cwd, deps));
 
-	const started = await Promise.all(
-		planned.map(async (run) => {
-			const self: SelfReference = {};
-			const channel = await deps.createChannel({
-				runId: run.runId,
-				agent: run.definition,
-				cwd: run.cwd,
-				agentDir: deps.agentDir,
-				model: run.model,
-				customTools: [deps.childTool(run.runId, self, deps.registry)],
-				...(request.context === "fork" && spawnContext.parentEntries !== undefined
-					? { forkEntries: spawnContext.parentEntries }
-					: {}),
-			});
-			const handle: RunHandle = {
-				runId: run.runId,
-				agent: run.definition.name,
-				channel,
-				hasInboundWait: false,
-				induced: new Set(),
-				inducedErrors: [],
-			};
-			self.current = handle;
-			deps.registry.add(handle);
-			return { run, handle };
-		}),
-	);
+	const started = await startRuns(planned, request, spawnContext, deps);
 
 	const abortChildren = (): void => {
 		for (const { handle } of started) void handle.channel.abort();
@@ -211,7 +185,55 @@ export async function spawnAgents(
 		if (timer !== undefined) clearTimeout(timer);
 		spawnContext.signal?.removeEventListener("abort", abortChildren);
 		for (const { handle } of started) deps.registry.remove(handle.runId);
+		await disposeAll(started);
 	}
+}
+
+/** Create one channel per plan. Nothing this helper created survives a failure inside it. */
+async function startRuns(
+	planned: readonly PlannedRun[],
+	request: SpawnRequest,
+	spawnContext: SpawnContext,
+	deps: SpawnDependencies,
+): Promise<Array<{ run: PlannedRun; handle: RunHandle }>> {
+	const started: Array<{ run: PlannedRun; handle: RunHandle }> = [];
+	const outcomes = await Promise.allSettled(
+		planned.map(async (run) => {
+			const self: SelfReference = {};
+			const channel = await deps.createChannel({
+				runId: run.runId,
+				agent: run.definition,
+				cwd: run.cwd,
+				agentDir: deps.agentDir,
+				model: run.model,
+				customTools: [deps.childTool(run.runId, self, deps.registry)],
+				...(request.context === "fork" && spawnContext.parentEntries !== undefined
+					? { forkEntries: spawnContext.parentEntries }
+					: {}),
+			});
+			const handle: RunHandle = {
+				runId: run.runId,
+				agent: run.definition.name,
+				channel,
+				hasInboundWait: false,
+				induced: new Set(),
+				inducedErrors: [],
+			};
+			self.current = handle;
+			deps.registry.add(handle);
+			started.push({ run, handle });
+		}),
+	);
+	const failure = outcomes.find((outcome) => outcome.status === "rejected");
+	if (failure === undefined) return started;
+	for (const { handle } of started) deps.registry.remove(handle.runId);
+	await disposeAll(started);
+	throw failure.reason;
+}
+
+/** End every child session; a cleanup failure must not mask the run results. */
+async function disposeAll(started: readonly { handle: RunHandle }[]): Promise<void> {
+	await Promise.allSettled(started.map(({ handle }) => handle.channel.dispose()));
 }
 
 /** Wait for every turn a sibling message started, so no child work outlives the call. */
@@ -294,7 +316,7 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
-		noExtensions: true,
+		noExtensions: !input.agent.extensions,
 		noThemes: true,
 		noPromptTemplates: true,
 		noSkills: !input.agent.inheritSkills,
@@ -360,6 +382,16 @@ export function wrapSession(session: AgentSession): AgentChannel {
 		},
 		abort: async () => {
 			await session.abort();
+		},
+		dispose: async () => {
+			// The SDK releases extension-scoped resources from `session_shutdown`;
+			// dispose() alone only invalidates the runner. The reason union has no
+			// child-specific member, and handlers only need "this session is going away".
+			try {
+				await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+			} finally {
+				session.dispose();
+			}
 		},
 		nextAssistantText: () => waitForAssistantText(session),
 		lastAssistantText: () => lastAssistantText(session.messages),

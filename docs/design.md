@@ -49,7 +49,8 @@ spawn_agents({
   (未知の agent、解決不能なモデル)だけが呼び出し全体を失敗させる。
 - モデル解決順: `tasks[].model` → 定義の `model` → 親セッションのモデル。
   **解決結果を必ず `results[].model` に含める**。指定が黙って無視される余地を残さない。
-- 子は `spawn_agents` を受け取らない。委譲の深さは 1 に固定される。
+- 既定では子に `spawn_agents` を渡さないため、委譲の深さは 1 になる。定義に
+  `extensions: true` を書いた子は拡張と一緒に `spawn_agents` を受け取り、多段委譲できる(ADR 0006)。
 
 ### `message_agent`
 
@@ -77,7 +78,8 @@ message_agent({ to, text, wait? }) -> { reply?: string }
 ### frontmatter 互換
 
 `~/.pi/agent/agents/*.md` の pi-subagents 互換サブセットを読む:
-`name, description, tools, model, thinking, systemPromptMode, inheritProjectContext, inheritSkills`。
+`name, description, tools, model, thinking, systemPromptMode, inheritProjectContext, inheritSkills, extensions`。
+`extensions` は子セッションでグローバル設定の `packages` をロードするか(既定 false)。
 **対応キーのみ有効**で、未知キー(`async` など)は警告して無視する。
 定義ファイルが読めることと、全設定が反映されることは別である。
 
@@ -121,7 +123,6 @@ src/tools/          spawn_agents(親)と message_agent(子)
 
 - 実装・自動テスト完了(基準: 2026-09-26 の作業ツリー)。
 - **未検証**: 実モデルでのスモークテスト。`src/spawn.ts` の `createChildChannel` は実 SDK セッションを
-  必要とするため自動テストの対象外。2エージェントを並列 spawn し、片方からもう片方へ
-  `message_agent` で質問して返信が結果に現れることを確認する。
-- 検証値: `npm run verify` グリーン、テスト 72 件、カバレッジ 94.72% lines / 93.30% branches /
-  94.67% functions、ツール面 308 トークン。測定方法は [foundation.md](foundation.md) の「計測方法」。
+  必要とするため自動テストの対象外。手順は [AGENTS.md](../AGENTS.md) の末尾にある。
+- 検証値: `npm run verify` グリーン、テスト 77 件、カバレッジ 95.37% lines / 92.83% branches /
+  96.74% functions、ツール面 308 トークン。測定方法は [foundation.md](foundation.md) の「計測方法」。

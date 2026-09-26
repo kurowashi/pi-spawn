@@ -16,7 +16,7 @@
 | `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | 同上 | 同ファイルの `ALLOWED_PEER_DEPENDENCIES` |
 | devDependency は allowlist 内のみ | 同上 | 同ファイルの `ALLOWED_DEV_DEPENDENCIES` |
 | 登録ツールは親の `spawn_agents` と子の `message_agent` の2つだけ | `test/contract/tool-surface.test.ts` | 同ファイルの `EXPECTED_PARENT_TOOLS` |
-| 子は spawn 系ツールを受け取らない(深さ1固定) | 同上 | — |
+| 子に注入するツールは `message_agent` の1つだけ(既定の子は拡張をロードしないため spawn 系ツールを持たない) | `test/contract/tool-surface.test.ts` + 手動確認 | `src/spawn.ts` の `noExtensions`、`src/catalog.ts` の `extensions` |
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
 | システムプロンプトへの agent カタログ注入が **120 トークン**以内 | 同上 | 同ファイルの `CATALOG_BUDGET`(5体×40字を上限とみなす) |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `MAX_DESCRIPTION_CHARS` |
@@ -42,5 +42,9 @@
 ## 手動確認が残る範囲(制約ではない)
 
 `src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外。
-ここは実モデルでのスモークテストで確認する: 2エージェントを並列 spawn し、片方からもう片方へ
-`message_agent` で質問して返信が結果に現れること。
+ここは実モデルでのスモークテストで確認する:
+
+1. 2エージェントを並列 spawn し、片方からもう片方へ `message_agent` で質問して返信が結果に現れること。
+2. `extensions: true` の agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
+   呼び出しの終了後に MCP サーバーのプロセスが残っていないこと(`pgrep -f` などで確認)。
+3. 既定の子(`extensions` 無し)からは `spawn_agents` を呼べないこと。

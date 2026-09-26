@@ -30,6 +30,7 @@ interface FakeRun {
 	output: string;
 	streaming: boolean;
 	aborted: boolean;
+	disposed: boolean;
 	/** When true, a delivered message's turn settles only after releaseDelivery(). */
 	holdDeliveries: boolean;
 	/** True once a held delivery turn settled. */
@@ -55,6 +56,7 @@ function createFakeRun(agent: string): FakeRun {
 		output: `${agent} finished`,
 		streaming: false,
 		aborted: false,
+		disposed: false,
 		holdDeliveries: false,
 		deliverySettled: false,
 		failDeliveries: false,
@@ -93,6 +95,9 @@ function createFakeRun(agent: string): FakeRun {
 			run.aborted = true;
 			abortPrompt?.();
 			run.releaseDelivery();
+		},
+		dispose: async () => {
+			run.disposed = true;
 		},
 		nextAssistantText: () => new Promise((resolve) => (resolveReply = resolve)),
 		lastAssistantText: () => run.output,
@@ -338,6 +343,20 @@ test("runs are unregistered when the call settles", async () => {
 	const harness = makeHarness(DEFINITIONS, async () => {});
 	await spawn(harness, { tasks: [{ agent: "writer", task: "x" }] });
 	assert.deepEqual(harness.deps.registry.list(), []);
+	assert.equal(harness.runs.get("writer")?.disposed, true);
+});
+
+test("a channel failure during setup disposes the sibling it already created", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	const create = harness.deps.createChannel;
+	harness.deps.createChannel = async (input) => {
+		if (input.agent.name === "reviewer") throw new Error("channel exploded");
+		return create(input);
+	};
+
+	await assert.rejects(() => spawn(harness, BOTH_TASKS), /channel exploded/);
+	assert.equal(harness.runs.get("writer")?.disposed, true);
+	assert.deepEqual(harness.deps.registry.list(), []);
 });
 
 test("a timeout aborts the run and reports it", async () => {
@@ -347,6 +366,7 @@ test("a timeout aborts the run and reports it", async () => {
 	const results = await spawn(harness, { tasks: [{ agent: "writer", task: "x" }], timeoutMs: 5 });
 
 	assert.equal(harness.runs.get("writer")?.aborted, true);
+	assert.equal(harness.runs.get("writer")?.disposed, true);
 	assert.match(results[0]?.error ?? "", /aborted/);
 	assert.deepEqual(harness.deps.registry.list(), []);
 });

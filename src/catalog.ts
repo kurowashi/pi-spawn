@@ -23,6 +23,7 @@ const KNOWN_KEYS = new Set([
 	"systemPromptMode",
 	"inheritProjectContext",
 	"inheritSkills",
+	"extensions",
 ]);
 
 const THINKING_LEVELS = new Set<string>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -53,6 +54,7 @@ export function parseAgent(
 		body: body.trim(),
 		inheritProjectContext: frontmatter["inheritProjectContext"] !== false,
 		inheritSkills: frontmatter["inheritSkills"] !== false,
+		extensions: frontmatter["extensions"] === true,
 		systemPromptMode: readSystemPromptMode(frontmatter["systemPromptMode"], path, warn),
 		path,
 	};

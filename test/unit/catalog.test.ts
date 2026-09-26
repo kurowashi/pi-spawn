@@ -36,6 +36,7 @@ thinking: medium
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
+extensions: true
 ---
 
 Body text.
@@ -48,6 +49,7 @@ Body text.
 	assert.equal(agent.systemPromptMode, "replace");
 	assert.equal(agent.inheritProjectContext, false);
 	assert.equal(agent.inheritSkills, false);
+	assert.equal(agent.extensions, true);
 	assert.equal(agent.body, "Body text.");
 });
 
@@ -87,6 +89,7 @@ test("defaults to append mode and inheriting context", () => {
 	assert.equal(agent?.systemPromptMode, "append");
 	assert.equal(agent?.inheritProjectContext, true);
 	assert.equal(agent?.inheritSkills, true);
+	assert.equal(agent?.extensions, false);
 	assert.equal(agent?.tools, undefined);
 });
 
@@ -166,6 +169,7 @@ test("formats a bounded one-line catalog", () => {
 			body: "",
 			inheritProjectContext: true,
 			inheritSkills: true,
+			extensions: false,
 			systemPromptMode: "append",
 			path: "p",
 		},
@@ -175,6 +179,7 @@ test("formats a bounded one-line catalog", () => {
 			body: "",
 			inheritProjectContext: true,
 			inheritSkills: true,
+			extensions: false,
 			systemPromptMode: "append",
 			path: "p",
 		},
