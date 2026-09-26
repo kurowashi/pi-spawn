@@ -1,26 +1,28 @@
-# AGENTS.md — pi-spawn の制約
+# AGENTS.md — pi-spawn で作業するエージェント向けの指示
 
-このファイルには機械的に検証できる制約と、その変更時の手順を書く。検証手段を併記できない
-ものは制約として書かない。手動でしか確認できない範囲は末尾に区分して示す。
+読者は pi-spawn を変更する AI エージェントと開発者です。利用者向けの仕様は README に書きます。
 
-## 検証コマンド
+ここには、壊してはいけない制約と、制約に触れる変更の手順だけを書きます。制約の正はテストで、
+下表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
+制約として書かず、自動テストできない範囲は末尾に分けます。
 
-`npm run verify`(= `npm run check` + `npm test` + `npm run test:coverage`)が完了条件。
-下表の「検証」列は個別の検証箇所であり、自動検証はすべて `verify` に含まれる。
-手動確認は末尾に分ける。
+## 完了条件
+
+`npm run verify`(= `npm run check` + `npm test` + `npm run test:coverage`)が通ること。
+フックが通っても CI が通らなければ未完了。下表の「検証」列は個別の検証箇所であり、
+自動検証はすべて `verify` に含まれます。
 
 ## 制約
 
-| 制約 | 検証 | 上限・許可の定義箇所 |
+| 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | 実行時依存を持たない(`dependencies` は空) | `test/contract/dependencies.test.ts` | `package.json` |
 | `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_PEER_DEPENDENCIES` |
 | devDependency は allowlist 内のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_DEV_DEPENDENCIES` |
-| 登録ツールは親の `spawn_agents` と子の `message_agent` の2つだけ | `test/contract/tool-surface.test.ts` | 同ファイルの `EXPECTED_PARENT_TOOLS` |
-| 子に注入するツールは `message_agent` と、対話 UI があるときだけ `ask_user`(既定の子は拡張をロードしないため spawn 系ツールを持たない) | `test/contract/tool-surface.test.ts` + 手動確認 | `src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
+| ツール面は `spawn_agents`(親)/ `message_agent` / `ask_user`(対話 UI 時の子のみ)の3つだけ | `test/contract/tool-surface.test.ts` + 手動確認 | 同ファイルの `EXPECTED_PARENT_TOOLS`、`src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
-| ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `MAX_DESCRIPTION_CHARS` |
-| トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `MAX_TOP_LEVEL_PARAMETERS` |
+| ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_DESCRIPTION_CHARS` |
+| トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_TOP_LEVEL_PARAMETERS` |
 | resume は永続化済みの run だけを対象にする(run id = セッション id、`cwd` 一致で探索) | `test/unit/spawn-tool.test.ts` の `findRunSession` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
 | 人間への質問は spawn 呼び出し単位で直列化される | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `createAskQueue` |
@@ -40,7 +42,6 @@
   実行時依存(`dependencies`)の追加は不可。
 - カバレッジは `test/unit` と `test/integration` で計測する(`package.json` の `test:coverage`)。
   契約テストは jiti 経由で `src` をもう一度ロードするため、同じファイルが2実体として数えられる。
-- 完了条件は `npm run verify` が通ること。フックが通っても CI が通らなければ未完了。
 
 ## 手動スモークテスト(自動検証の対象外)
 
