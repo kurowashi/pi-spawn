@@ -5,8 +5,9 @@
  * cheaper and stricter than arguing with types/publishing linters, given the
  * package ships TypeScript source and runs no build step.
  *
- * `--ignore-scripts` keeps the `prepare` hook (lefthook) out of the output so
- * the JSON stays parseable and the check stays side-effect free.
+ * `--ignore-scripts` keeps lifecycle hooks out of the output so the JSON stays
+ * parseable and the check stays side-effect free. Hook installation lives on
+ * `postinstall`, which `npm pack` never runs.
  */
 
 import assert from "node:assert/strict";
