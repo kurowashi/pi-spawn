@@ -16,7 +16,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./catalog.ts";
 import type { RunRegistry } from "./registry.ts";
-import type { AgentChannel, AgentDefinition, RunHandle, SpawnResult, SpawnTask } from "./types.ts";
+import type {
+	AgentChannel,
+	AgentDefinition,
+	RunHandle,
+	RunProgress,
+	RunUsage,
+	SpawnResult,
+	SpawnTask,
+} from "./types.ts";
 
 /** The model fields this extension reads. Structurally satisfied by the SDK's Model. */
 export interface ModelIdentity {
@@ -95,6 +103,10 @@ export interface CreateChannelInput {
 	customTools: ToolDefinition[];
 	/** Parent conversation entries when context is "fork". */
 	forkEntries?: FileEntry[];
+	/** Directory for persisted child transcripts. Undefined keeps the run in memory. */
+	sessionDir?: string;
+	/** Parent session file; needed to fork a persisted transcript. */
+	parentSessionFile?: string;
 }
 
 /** Mutable ref filled in immediately after the channel exists. */
@@ -107,6 +119,8 @@ export interface SpawnDependencies {
 	availableModels: readonly ModelIdentity[];
 	parentModel: ModelIdentity | undefined;
 	registry: RunRegistry;
+	/** Directory for persisted child transcripts. Fake channels may omit it. */
+	sessionDir?: string;
 	nextRunId(): string;
 	createChannel(input: CreateChannelInput): Promise<AgentChannel>;
 	childTool(runId: string, self: SelfReference, registry: RunRegistry): ToolDefinition;
@@ -122,6 +136,12 @@ export interface SpawnContext {
 	cwd: string;
 	signal?: AbortSignal;
 	parentEntries?: FileEntry[];
+	/** Parent session file, when the parent is persisted. */
+	parentSessionFile?: string;
+	/** Called once immediately, then every interval, with each live run's state. */
+	onProgress?: (progress: readonly RunProgress[]) => void;
+	/** Progress refresh interval; tests shorten it. Default: 1000ms. */
+	progressIntervalMs?: number;
 }
 
 interface PlannedRun {
@@ -162,6 +182,7 @@ export async function spawnAgents(
 	const timer = request.timeoutMs === undefined ? undefined : setTimeout(abortChildren, request.timeoutMs);
 	spawnContext.signal?.addEventListener("abort", abortChildren, { once: true });
 
+	let stopProgress: (() => void) | undefined;
 	try {
 		const briefed: StartedRun[] = started.map((entry) => ({
 			...entry,
@@ -170,11 +191,14 @@ export async function spawnAgents(
 				started.map((candidate) => candidate.handle),
 			),
 		}));
-		const results = await Promise.all(briefed.map((entry) => runOne(entry)));
+		stopProgress = startProgress(briefed, Date.now(), spawnContext);
+		const settled = await Promise.all(briefed.map(runWithHandle));
+		// Induced turns are this call's work too, so they settle before results are finalized.
 		await settleInduced(started.map(({ handle }) => handle));
 		const errorsByRun = new Map(started.map(({ handle }) => [handle.runId, handle.inducedErrors] as const));
-		return results.map((result) => withInducedErrors(result, errorsByRun.get(result.run_id) ?? []));
+		return settled.map((entry) => finalizeResult(entry, errorsByRun.get(entry.handle.runId) ?? []));
 	} finally {
+		stopProgress?.();
 		if (timer !== undefined) clearTimeout(timer);
 		spawnContext.signal?.removeEventListener("abort", abortChildren);
 		for (const { handle } of started) deps.registry.remove(handle.runId);
@@ -203,6 +227,8 @@ async function startRuns(
 				...(request.context === "fork" && spawnContext.parentEntries !== undefined
 					? { forkEntries: spawnContext.parentEntries }
 					: {}),
+				...(deps.sessionDir === undefined ? {} : { sessionDir: deps.sessionDir }),
+				...(spawnContext.parentSessionFile === undefined ? {} : { parentSessionFile: spawnContext.parentSessionFile }),
 			});
 			const handle: RunHandle = {
 				runId: run.runId,
@@ -238,6 +264,35 @@ async function settleInduced(handles: readonly RunHandle[]): Promise<void> {
 	}
 }
 
+/** Emit one frame immediately, then every interval, until the returned stop is called. */
+function startProgress(briefed: readonly StartedRun[], startedAt: number, spawnContext: SpawnContext): () => void {
+	const { onProgress } = spawnContext;
+	if (onProgress === undefined) return () => {};
+	const report = (): void => onProgress(briefed.map((entry) => runProgress(entry, startedAt)));
+	report();
+	const timer = setInterval(report, spawnContext.progressIntervalMs ?? PROGRESS_INTERVAL_MS);
+	timer.unref();
+	return () => clearInterval(timer);
+}
+
+/** One frame of progress for a live run. */
+function runProgress(entry: StartedRun, startedAt: number): RunProgress {
+	const snapshot = entry.handle.channel.snapshot();
+	return {
+		agent: entry.handle.agent,
+		run_id: entry.handle.runId,
+		model: modelName(entry.run.model),
+		activity: snapshot.activity,
+		elapsed_ms: Date.now() - startedAt,
+		usage: snapshot.usage,
+	};
+}
+
+/** `provider/id`, the only model reference this extension produces. */
+function modelName(model: ModelIdentity): string {
+	return `${model.provider}/${model.id}`;
+}
+
 /** Attach induced-turn failures to the run they happened in; failures are labeled, never dropped. */
 function withInducedErrors(result: SpawnResult, errors: readonly string[]): SpawnResult {
 	if (errors.length === 0) return result;
@@ -268,15 +323,41 @@ function findDefinition(name: string, agentDir: string): AgentDefinition {
 	throw new Error(`unknown agent '${name}'. Defined agents: ${known.length > 0 ? known : "(none)"}`);
 }
 
+/** A finished prompt plus the handle it ran on, so results can be finalized after induced turns settle. */
+interface SettledRun {
+	handle: RunHandle;
+	result: SpawnResult;
+}
+
+/** Run one prompt and keep its handle for finalization. */
+async function runWithHandle(entry: StartedRun): Promise<SettledRun> {
+	return { handle: entry.handle, result: await runOne(entry) };
+}
+
+/** The caller's view of one run: usage as of the end of the call plus any induced-turn failure. */
+function finalizeResult(entry: SettledRun, inducedErrors: readonly string[]): SpawnResult {
+	return withInducedErrors({ ...entry.result, ...snapshotFields(entry.handle) }, inducedErrors);
+}
+
 async function runOne(started: StartedRun): Promise<SpawnResult> {
 	const { run, handle, briefing } = started;
-	const identity = { agent: run.definition.name, run_id: run.runId, model: `${run.model.provider}/${run.model.id}` };
+	const identity = { agent: run.definition.name, run_id: run.runId, model: modelName(run.model) };
 	try {
 		await handle.channel.prompt(`${briefing}${run.task.task}`);
 		return { ...identity, output: handle.channel.lastAssistantText() ?? "" };
 	} catch (error) {
-		return { ...identity, error: error instanceof Error ? error.message : String(error) };
+		const message = error instanceof Error ? error.message : String(error);
+		return { ...identity, error: message };
 	}
+}
+
+/** Usage and transcript path as of now; read once the run has stopped for good. */
+function snapshotFields(handle: RunHandle): Pick<SpawnResult, "usage" | "session_file"> {
+	const snapshot = handle.channel.snapshot();
+	return {
+		usage: snapshot.usage,
+		...(snapshot.sessionFile === undefined ? {} : { session_file: snapshot.sessionFile }),
+	};
 }
 
 /**
@@ -299,6 +380,12 @@ export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]):
 
 /** Wait budget for a sibling reply before the waiting run gives up. */
 const REPLY_TIMEOUT_MS = 120_000;
+
+/** Refresh interval for the parent's view of live runs. */
+const PROGRESS_INTERVAL_MS = 1000;
+
+/** Activity label before the first event arrives. */
+const DEFAULT_ACTIVITY = "starting";
 
 /** The SDK's session options and model type, named once so the cast stays in one place. */
 type SessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
@@ -327,7 +414,7 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 		...(input.agent.thinking === undefined ? {} : { thinkingLevel: input.agent.thinking }),
 		customTools: input.customTools,
 		resourceLoader: loader,
-		sessionManager: SessionManager.inMemory(input.cwd, undefined, input.forkEntries),
+		sessionManager: createSessionManager(input),
 	});
 
 	applyDeclaredTools(
@@ -336,6 +423,21 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 		input.customTools.map((tool) => tool.name),
 	);
 	return wrapSession(session);
+}
+
+/**
+ * Transcript storage for one run.
+ *
+ * With a session directory the transcript is persisted; forked context needs the
+ * parent's session file so the forked history lands in the child's own file.
+ * Without a directory the run stays in memory.
+ */
+function createSessionManager(input: CreateChannelInput): SessionManager {
+	if (input.sessionDir === undefined) return SessionManager.inMemory(input.cwd, undefined, input.forkEntries);
+	if (input.forkEntries !== undefined && input.parentSessionFile !== undefined) {
+		return SessionManager.forkFrom(input.parentSessionFile, input.cwd, input.sessionDir);
+	}
+	return SessionManager.create(input.cwd, input.sessionDir);
 }
 
 /** Restrict the child to the definition's tool list plus the injected tools. */
@@ -357,6 +459,7 @@ export function selectActiveTools(declared: readonly string[], customToolNames: 
 
 /** Adapt AgentSession to the narrow channel this extension depends on. */
 export function wrapSession(session: AgentSession): AgentChannel {
+	const activity = trackActivity(session);
 	return {
 		prompt: async (text) => {
 			await session.prompt(text);
@@ -380,6 +483,62 @@ export function wrapSession(session: AgentSession): AgentChannel {
 		},
 		nextAssistantText: () => waitForAssistantText(session),
 		lastAssistantText: () => lastAssistantText(session.messages),
+		snapshot: () => {
+			const sessionFile = session.sessionFile;
+			return {
+				activity: activity(),
+				usage: usageFromStats(session.getSessionStats()),
+				...(sessionFile === undefined ? {} : { sessionFile }),
+			};
+		},
+	};
+}
+
+/** Latest activity label; the subscription lives as long as the session does. */
+function trackActivity(session: AgentSession): () => string {
+	let activity = DEFAULT_ACTIVITY;
+	session.subscribe((event) => {
+		activity = describeSessionEvent(event as ActivityEvent) ?? activity;
+	});
+	return () => activity;
+}
+
+/** The slice of a session event this extension turns into a progress label. */
+export interface ActivityEvent {
+	type: string;
+	toolName?: unknown;
+	assistantMessageEvent?: unknown;
+}
+
+/** Human-readable activity for events worth reporting; undefined keeps the previous label. */
+export function describeSessionEvent(event: ActivityEvent): string | undefined {
+	switch (event.type) {
+		case "tool_execution_start":
+			return typeof event.toolName === "string" ? `tool: ${event.toolName}` : "tool";
+		case "message_update":
+			return isTextDelta(event.assistantMessageEvent) ? "writing" : undefined;
+		case "turn_start":
+			return "thinking";
+		default:
+			return undefined;
+	}
+}
+
+function isTextDelta(value: unknown): boolean {
+	return typeof value === "object" && value !== null && "type" in value && value.type === "text_delta";
+}
+
+/** Reduce SDK session stats to the usage fields this extension reports. */
+export function usageFromStats(stats: {
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
+	cost: number;
+}): RunUsage {
+	return {
+		input: stats.tokens.input,
+		output: stats.tokens.output,
+		cacheRead: stats.tokens.cacheRead,
+		cacheWrite: stats.tokens.cacheWrite,
+		cost: stats.cost,
 	};
 }
 

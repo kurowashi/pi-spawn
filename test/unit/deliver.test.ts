@@ -22,6 +22,7 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 			dispose: async () => {},
 			nextAssistantText: () => Promise.resolve("reply"),
 			lastAssistantText: () => "output",
+			snapshot: () => ({ activity: "idle", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } }),
 			...channel,
 		},
 	};

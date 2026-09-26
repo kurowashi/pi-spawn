@@ -15,7 +15,7 @@ import type { AgentToolResult, ExtensionContext, ToolDefinition } from "@earendi
 import { createRunRegistry } from "../../src/registry.ts";
 import { type CreateChannelInput, type SpawnDependencies, spawnAgents } from "../../src/spawn.ts";
 import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
-import type { AgentChannel, SpawnResult } from "../../src/types.ts";
+import type { AgentChannel, RunProgress, SpawnResult } from "../../src/types.ts";
 
 /* ------------------------------------------------------------------ */
 /* Fakes                                                               */
@@ -42,6 +42,12 @@ interface FakeRun {
 	failure?: string;
 	/** Task text as the run received it, including the sibling briefing. */
 	received: string[];
+	/** Latest activity label the parent would see. */
+	activity: string;
+	/** Usage the parent would count after the run. */
+	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
+	/** Persisted transcript path, when the run is file-backed. */
+	sessionFile?: string;
 	/** Resolves when the run is aborted. Lets a script simulate long work. */
 	waitForAbort(): Promise<never>;
 }
@@ -65,6 +71,8 @@ function createFakeRun(agent: string): FakeRun {
 			releaseDelivery = undefined;
 		},
 		received: [],
+		activity: "starting",
+		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 		waitForAbort: () =>
 			new Promise<never>((_resolve, reject) => {
 				abortPrompt = () => reject(new Error("run aborted"));
@@ -101,6 +109,11 @@ function createFakeRun(agent: string): FakeRun {
 		},
 		nextAssistantText: () => new Promise((resolve) => (resolveReply = resolve)),
 		lastAssistantText: () => run.output,
+		snapshot: () => ({
+			activity: run.activity,
+			usage: run.usage,
+			...(run.sessionFile === undefined ? {} : { sessionFile: run.sessionFile }),
+		}),
 	};
 	return run;
 }
@@ -190,7 +203,7 @@ test("a run asks a sibling and returns the reply", async () => {
 		if (input.agent.name !== "reviewer") return;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool, "the child receives the message tool");
-		const reply = textOf(await callTool(tool, { to: "writer", text: "is the draft ready?", wait: true }));
+		const reply = textOf(await callTool(tool, { to: "writer", text: "is the draft ready?", wait_for_reply: true }));
 		run.output = `reviewer heard: ${reply}`;
 	});
 
@@ -214,7 +227,7 @@ test("a streaming sibling is interrupted instead of queued", async () => {
 		writer.streaming = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "ping", wait: true });
+		await callTool(tool, { to: "writer", text: "ping", wait_for_reply: true });
 	});
 
 	await spawn(harness, BOTH_TASKS);
@@ -231,7 +244,7 @@ test("a turn a message started is waited for before the call returns", async () 
 		writer.holdDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work", wait: false });
+		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
 		// Release on a later macrotask; the call must still be waiting when it runs.
 		setTimeout(() => writer.releaseDelivery(), 0);
 	});
@@ -251,7 +264,7 @@ test("a failed induced turn is reported on the run it happened in", async () => 
 		writer.failDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work", wait: false });
+		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -267,11 +280,11 @@ test("an ambiguous agent name is refused and a run id resolves it", async () => 
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		try {
-			await callTool(tool, { to: "writer", text: "which one?", wait: true });
+			await callTool(tool, { to: "writer", text: "which one?", wait_for_reply: true });
 		} catch (error) {
 			failures.push(error instanceof Error ? error.message : String(error));
 		}
-		const reply = textOf(await callTool(tool, { to: "run-3", text: "you", wait: true }));
+		const reply = textOf(await callTool(tool, { to: "run-3", text: "you", wait_for_reply: true }));
 		assert.match(reply, /writer replied/);
 	});
 
@@ -369,4 +382,82 @@ test("a timeout aborts the run and reports it", async () => {
 	assert.equal(harness.runs.get("writer")?.disposed, true);
 	assert.match(results[0]?.error ?? "", /aborted/);
 	assert.deepEqual(harness.deps.registry.list(), []);
+});
+
+test("results carry billed usage and the transcript path", async () => {
+	const usage = { input: 10, output: 20, cacheRead: 2, cacheWrite: 3, cost: 0.25 };
+	const harness = makeHarness(DEFINITIONS, async (input, run) => {
+		run.usage = usage;
+		run.sessionFile = `/tmp/${input.agent.name}.jsonl`;
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.deepEqual(
+		results.map((result) => result.usage),
+		[usage, usage],
+	);
+	assert.equal(results[0]?.session_file, "/tmp/reviewer.jsonl");
+});
+
+test("a failed run still reports what it was billed", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, run) => {
+		if (input.agent.name !== "reviewer") return;
+		run.usage = { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.1 };
+		throw new Error("reviewer exploded");
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.equal(results[0]?.error, "reviewer exploded");
+	assert.equal(results[0]?.usage?.input, 1);
+});
+
+test("usage from a sibling-induced turn is included in the final result", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
+		if (input.agent.name !== "reviewer") return;
+		const writer = harness.runs.get("writer");
+		assert.ok(writer);
+		const tool = tools.find((candidate) => candidate.name === "message_agent");
+		assert.ok(tool);
+		writer.usage = { input: 99, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 };
+		await callTool(tool, { to: "writer", text: "extra work", wait_for_reply: false });
+	});
+
+	const results = await spawn(harness, BOTH_TASKS);
+
+	assert.equal(results[1]?.usage?.input, 99, "the induced turn's billing is counted");
+});
+
+test("progress frames report every live run until the call returns", async () => {
+	const frames: RunProgress[][] = [];
+	const harness = makeHarness(DEFINITIONS, async (input, run) => {
+		run.activity = `tool: ${input.agent.name}`;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	});
+
+	await spawnAgents(
+		BOTH_TASKS,
+		{
+			cwd: harness.cwd,
+			progressIntervalMs: 5,
+			onProgress: (progress) => frames.push([...progress]),
+		},
+		harness.deps,
+	);
+
+	assert.ok(frames.length > 1, "the immediate frame is followed by interval frames");
+	assert.deepEqual(
+		frames[0]?.map((run) => run.agent),
+		["reviewer", "writer"],
+	);
+	assert.deepEqual(
+		frames[0]?.map((run) => run.activity),
+		["starting", "starting"],
+	);
+	assert.ok(
+		frames.some((frame) => frame.every((run) => run.activity.startsWith("tool: "))),
+		"interval frames see each run's latest activity",
+	);
+	assert.equal(typeof frames.at(-1)?.[0]?.elapsed_ms, "number");
 });

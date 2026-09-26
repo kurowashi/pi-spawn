@@ -36,6 +36,35 @@ export interface SpawnTask {
 	cwd?: string;
 }
 
+/** Token and cost totals billed to one run. The SDK's Usage, reduced to the fields a child reports. */
+export interface RunUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	/** Total cost for the run, in the provider's currency. */
+	cost: number;
+}
+
+/** Everything a live run can report without being stopped. */
+export interface ChannelSnapshot {
+	/** Short label for the latest activity: "starting", "thinking", "writing", "tool: bash". */
+	activity: string;
+	usage: RunUsage;
+	/** Persisted transcript path, when the run is file-backed. */
+	sessionFile?: string;
+}
+
+/** One live run's state, as reported to the parent while a spawn call is in flight. */
+export interface RunProgress {
+	agent: string;
+	run_id: string;
+	model: string;
+	activity: string;
+	elapsed_ms: number;
+	usage: RunUsage;
+}
+
 /** The result of one run. Failures are reported per run, never as a whole-call failure. */
 export interface SpawnResult {
 	agent: string;
@@ -43,6 +72,12 @@ export interface SpawnResult {
 	model: string;
 	output?: string;
 	error?: string;
+	/** Partial results only: the run is still working. */
+	progress?: { activity: string; elapsed_ms: number };
+	/** Tokens and cost billed to this run, including sibling-induced turns. */
+	usage?: RunUsage;
+	/** Persisted child transcript, when the run was file-backed. */
+	session_file?: string;
 }
 
 /**
@@ -71,6 +106,8 @@ export interface AgentChannel {
 	nextAssistantText(): Promise<string>;
 	/** Text of the last assistant message, or undefined when there is none. */
 	lastAssistantText(): string | undefined;
+	/** Current activity, billed usage, and transcript path. Safe to call while the run works. */
+	snapshot(): ChannelSnapshot;
 }
 
 /** A live child session plus its addressing keys. */

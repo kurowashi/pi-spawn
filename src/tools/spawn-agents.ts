@@ -6,12 +6,25 @@
  * this tool too.
  */
 
+import { join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { defineTool, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import {
+	type AgentToolResult,
+	type AgentToolUpdateCallback,
+	defineTool,
+	type ExtensionContext,
+	getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import type { RunRegistry } from "../registry.ts";
-import { createChildChannel, type SpawnDependencies, spawnAgents } from "../spawn.ts";
-import type { SpawnResult } from "../types.ts";
+import {
+	createChildChannel,
+	type SpawnContext,
+	type SpawnDependencies,
+	type SpawnRequest,
+	spawnAgents,
+} from "../spawn.ts";
+import type { RunProgress, SpawnResult } from "../types.ts";
 import { createMessageAgentTool } from "./message-agent.ts";
 
 export const DESCRIPTION = "Spawn 1..N child agents in parallel and wait for all results. They can message each other.";
@@ -34,7 +47,7 @@ const Parameters = Type.Object(
 				description: "fresh: empty context (default); fork: copy this conversation",
 			}),
 		),
-		timeout_ms: Type.Optional(Type.Number({ description: "Abort every run after this many milliseconds" })),
+		timeout_seconds: Type.Optional(Type.Number({ description: "Abort every run after this many seconds" })),
 	},
 	{ additionalProperties: false },
 );
@@ -52,26 +65,44 @@ export function createSpawnAgentsTool(options: SpawnToolOptions) {
 		label: "Spawn agents",
 		description: DESCRIPTION,
 		parameters: Parameters,
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentDir = getAgentDir();
 			const deps = options.dependencies?.({ cwd: ctx.cwd, agentDir }) ?? buildDependencies(options, ctx, agentDir);
-			const entries = ctx.sessionManager.getEntries();
-			const results = await spawnAgents(
-				{
-					tasks: params.tasks,
-					...(params.context === undefined ? {} : { context: params.context }),
-					...(params.timeout_ms === undefined ? {} : { timeoutMs: params.timeout_ms }),
-				},
-				{
-					cwd: ctx.cwd,
-					...(signal === undefined ? {} : { signal }),
-					...(params.context === "fork" ? { parentEntries: [...entries] } : {}),
-				},
-				deps,
-			);
-			return { content: [{ type: "text" as const, text: formatResults(results) }], details: { results } };
+			const results = await spawnAgents(spawnRequest(params), spawnContext(ctx, params, signal, onUpdate), deps);
+			const usage = totalUsage(results);
+			return {
+				content: [{ type: "text" as const, text: formatResults(results) }],
+				details: { results },
+				...(usage === undefined ? {} : { usage }),
+			};
 		},
 	});
+}
+
+/** The spawn request as the tool arguments express it. */
+export function spawnRequest(params: Static<typeof Parameters>): SpawnRequest {
+	return {
+		tasks: params.tasks,
+		...(params.context === undefined ? {} : { context: params.context }),
+		...(params.timeout_seconds === undefined ? {} : { timeoutMs: params.timeout_seconds * 1000 }),
+	};
+}
+
+/** The spawn context for this turn, including the parent's transcript when forking. */
+export function spawnContext(
+	ctx: ExtensionContext,
+	params: Static<typeof Parameters>,
+	signal: AbortSignal | undefined,
+	onUpdate: AgentToolUpdateCallback<SpawnToolDetails> | undefined,
+): SpawnContext {
+	const parentSessionFile = ctx.sessionManager.getSessionFile();
+	return {
+		cwd: ctx.cwd,
+		...(signal === undefined ? {} : { signal }),
+		...(params.context === "fork" ? { parentEntries: [...ctx.sessionManager.getEntries()] } : {}),
+		...(parentSessionFile === undefined ? {} : { parentSessionFile }),
+		...(onUpdate === undefined ? {} : { onProgress: (progress) => onUpdate(progressResult(progress)) }),
+	};
 }
 
 /** One readable block per run; failures are labeled, never dropped. */
@@ -82,6 +113,74 @@ export function formatResults(results: readonly SpawnResult[]): string {
 			return result.error === undefined ? `${header}\n${result.output ?? ""}` : `${header}\nERROR: ${result.error}`;
 		})
 		.join("\n\n");
+}
+
+/** The tool's structured details: final results, or in-flight progress in the same shape. */
+export interface SpawnToolDetails {
+	results: SpawnResult[];
+}
+
+/** Partial tool result shown while the runs still work. Never reaches the model. */
+export function progressResult(progress: readonly RunProgress[]): AgentToolResult<SpawnToolDetails> {
+	const results: SpawnResult[] = progress.map((run) => ({
+		agent: run.agent,
+		run_id: run.run_id,
+		model: run.model,
+		progress: { activity: run.activity, elapsed_ms: run.elapsed_ms },
+		usage: run.usage,
+	}));
+	return { content: [{ type: "text", text: formatProgress(progress) }], details: { results } };
+}
+
+/** One line per live run, for the parent's tool view. */
+export function formatProgress(progress: readonly RunProgress[]): string {
+	return progress
+		.map((run) => `[${run.agent}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})`)
+		.join("\n");
+}
+
+/** Compact elapsed time: "12s", "2m10s". */
+export function formatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** The full Usage shape the SDK sums into session totals; structural to avoid a pi-ai import. */
+export interface ToolUsage {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+}
+
+/**
+ * Sum the usage every run reported.
+ *
+ * Returns undefined when nothing was billed, so a failed call does not add a
+ * zero entry to the parent's cost accounting.
+ */
+export function totalUsage(results: readonly SpawnResult[]): ToolUsage | undefined {
+	const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+	for (const result of results) {
+		if (result.usage === undefined) continue;
+		totals.input += result.usage.input;
+		totals.output += result.usage.output;
+		totals.cacheRead += result.usage.cacheRead;
+		totals.cacheWrite += result.usage.cacheWrite;
+		totals.cost += result.usage.cost;
+	}
+	if (totals.input + totals.output + totals.cacheRead + totals.cacheWrite + totals.cost === 0) return undefined;
+	return {
+		input: totals.input,
+		output: totals.output,
+		cacheRead: totals.cacheRead,
+		cacheWrite: totals.cacheWrite,
+		totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+		// Per-component cost is not reported per run; only the total is summed upstream.
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: totals.cost },
+	};
 }
 
 /** The real dependency bundle, bound to the live parent context. */
@@ -97,6 +196,7 @@ function buildDependencies(
 		availableModels: available,
 		parentModel: parent,
 		registry: options.registry,
+		sessionDir: join(agentDir, "spawn-sessions"),
 		nextRunId: options.nextRunId ?? (() => crypto.randomUUID().replaceAll("-", "").slice(0, 8)),
 		createChannel: (input) => createChildChannel(input),
 		childTool: (runId, self, registry) => createMessageAgentTool({ runId, self, registry }),

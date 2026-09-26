@@ -29,6 +29,7 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 			dispose: async () => {},
 			nextAssistantText: () => Promise.resolve("pong"),
 			lastAssistantText: () => "done",
+			snapshot: () => ({ activity: "idle", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 } }),
 			...channel,
 		},
 	};
@@ -57,7 +58,7 @@ test("a fire-and-forget message reports delivery, not a reply", async () => {
 	const target = handle("bbb", "writer", { deliver: async (text) => void sent.push(text) });
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
-	const result = await call(tool, { to: "writer", text: "status?", wait: false });
+	const result = await call(tool, { to: "writer", text: "status?", wait_for_reply: false });
 
 	assert.equal(textOf(result), "delivered");
 	assert.deepEqual(sent, ["status?"]);
@@ -68,7 +69,7 @@ test("wait returns the sibling reply to the caller", async () => {
 	const target = handle("bbb", "writer");
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
-	const result = await call(tool, { to: "bbb", text: "ready?", wait: true });
+	const result = await call(tool, { to: "bbb", text: "ready?", wait_for_reply: true });
 
 	assert.equal(textOf(result), "pong");
 	assert.deepEqual(result.details, { to: "bbb", agent: "writer", replied: true });
@@ -114,7 +115,7 @@ test("a delivery failure reaches a waiting sender as a tool error", async () => 
 	});
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
-	await assert.rejects(() => call(tool, { to: "writer", text: "hi", wait: true }), /session is closed/);
+	await assert.rejects(() => call(tool, { to: "writer", text: "hi", wait_for_reply: true }), /session is closed/);
 });
 
 test("a fire-and-forget failure is recorded on the target, not thrown", async () => {
@@ -125,7 +126,7 @@ test("a fire-and-forget failure is recorded on the target, not thrown", async ()
 	});
 	const tool = makeTool(handle("aaa", "reviewer"), [target]);
 
-	const result = await call(tool, { to: "writer", text: "hi", wait: false });
+	const result = await call(tool, { to: "writer", text: "hi", wait_for_reply: false });
 
 	assert.equal(textOf(result), "delivered");
 	assert.deepEqual(target.inducedErrors, ["session is closed"]);

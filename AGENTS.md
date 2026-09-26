@@ -48,3 +48,7 @@
 2. `extensions: true` の agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
    呼び出しの終了後に MCP サーバーのプロセスが残っていないこと(`pgrep -f` などで確認)。
 3. 既定の子(`extensions` 無し)からは `spawn_agents` を呼べないこと。
+4. spawn した子のセッションが `~/.pi/agent/spawn-sessions/` に残り、結果の `session_file` と一致し、
+   `pi --session <path>` で開けること。`context: "fork"` の子は親の履歴から始まること。
+5. 子の実行中に `spawn_agents` の表示が1秒ごとに更新されること。完了後、親セッションのコスト統計に
+   子の使用量が加算されていること(`/session` で確認)。

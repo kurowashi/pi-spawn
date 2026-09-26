@@ -12,13 +12,13 @@ import { deliverMessage } from "../deliver.ts";
 import type { RunRegistry } from "../registry.ts";
 import type { SelfReference } from "../spawn.ts";
 
-export const DESCRIPTION = "Message a sibling agent run. Set wait to receive its reply.";
+export const DESCRIPTION = "Message a sibling agent run. Set wait_for_reply to receive its reply.";
 
 const Parameters = Type.Object(
 	{
 		to: Type.String({ description: "Sibling run id or agent name" }),
 		text: Type.String({ description: "Message text" }),
-		wait: Type.Optional(Type.Boolean({ description: "Wait for the reply (default false)" })),
+		wait_for_reply: Type.Optional(Type.Boolean({ description: "Wait for the reply (default false)" })),
 	},
 	{ additionalProperties: false },
 );
@@ -46,7 +46,7 @@ export function createMessageAgentTool(options: MessageToolOptions) {
 				waiter,
 				target: resolution.handle,
 				text: params.text,
-				wait: params.wait === true,
+				wait: params.wait_for_reply === true,
 			});
 			if (!outcome.delivered) throw new Error(outcome.error);
 
