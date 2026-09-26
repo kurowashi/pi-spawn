@@ -91,6 +91,7 @@ message_agent({ to, text, wait_for_reply? })   // 子のみ
 | `model` | `tasks[]`(任意) | 子のモデルを上書き(`provider/id` 形式) |
 | `cwd` | `tasks[]`(任意) | 子の作業ディレクトリ(既定は親と同じ) |
 | `context` | `spawn_agents`(任意) | `fresh`(既定、空の文脈)/ `fork`(この会話をコピー) |
+| `resume_run_id` | `tasks[]`(任意) | 以前の run の続きとして実行する。run id は結果の見出しに載る |
 | `timeout_seconds` | `spawn_agents`(任意) | 呼び出し全体の制限時間(秒)。過ぎたら全子を中断する |
 | `to` / `text` / `wait_for_reply` | `message_agent`(子のみ) | 宛先(agent 名か run id)/ 本文 / 返信を待つか(既定 false) |
 
@@ -122,6 +123,11 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 呼び出し結果は `{ agent, run_id, model, output }` の配列。run が失敗した場合は `output` の
 代わりに `error` が入る。未知の agent や解決できない `model` は、何も起動せずにエラーになる。
 
+`resume_run_id` を指定すると、その run の子セッションを読み直し、同じ文脈の続きとして `task` を
+実行する。`agent` / `model` / `cwd` は今回の指定が使われる。run は spawn 時の `cwd` で探索するため、
+別の `cwd` で spawn した run を再開するときは同じ `cwd` を渡す。使用量は再開後に請求された分だけが
+加算される。再開できるのは run id をセッション id として保存した run(この機能以降の spawn)だけ。
+
 ## できること
 
 | できる | 内容 |
@@ -129,6 +135,7 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | 単一委譲 | `tasks` に1件渡し、完了を待って出力を受け取る |
 | 並列委譲 | 複数件を同時に走らせ、全員の完了を待って全結果を受け取る |
 | 失敗の切り分け | 子の失敗はその子の結果に `error` として入り、兄弟の結果は失われない |
+| 再開 | 永続化された run を `resume_run_id` で読み直し、同じ文脈の続きとして指示できる |
 | 子同士の会話 | 兄弟を agent 名か run id で指定し、`wait_for_reply: true` で返信も受け取れる |
 | 兄弟の把握 | 兄弟がいる子のタスク先頭に宛先一覧が自動で付く |
 | モデル解決 | `tasks[].model` → 定義の `model` → 親セッションのモデルの順。実際に使われたモデルは結果に必ず入る |
@@ -145,7 +152,6 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | できない | 代替 |
 |---|---|
 | バックグラウンド実行(親を待たせない) | 親は待つしかない。長い作業は小さく分割して順に spawn する |
-| 終わった子への追加指示(resume) | 新しい spawn でやり直す |
 | 子から親への質問(返答待ち) | タスク文に判断基準を書く。結果に「未決」と選択肢を書かせる |
 | 親から実行中の子への指示 | タイムアウトで止めて出し直す |
 | 実行中の子の全文をその場で見る | 進捗は活動ラベルで見える。全文は完了後に `pi --session` で開く |

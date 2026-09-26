@@ -15,6 +15,7 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 		hasInboundWait: false,
 		induced: new Set(),
 		inducedErrors: [],
+		usageBase: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 		channel: {
 			prompt: async () => {},
 			deliver: async () => {},

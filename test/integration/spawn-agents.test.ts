@@ -144,6 +144,7 @@ const DEFINITIONS = {
 interface Harness {
 	deps: SpawnDependencies;
 	runs: Map<string, FakeRun>;
+	inputs: CreateChannelInput[];
 	cwd: string;
 }
 
@@ -154,6 +155,7 @@ function makeHarness(
 ): Harness {
 	const registry = createRunRegistry();
 	const runs = new Map<string, FakeRun>();
+	const inputs: CreateChannelInput[] = [];
 	const cwd = makeAgentDir(definitions);
 	let counter = 0;
 	const deps: SpawnDependencies = {
@@ -164,6 +166,7 @@ function makeHarness(
 		],
 		parentModel: { provider: "fixture", id: "parent" },
 		registry,
+		findRunSession: (runId) => (runId.startsWith("stored-") ? `/sessions/${runId}.jsonl` : undefined),
 		nextRunId: () => {
 			counter += 1;
 			return `run-${counter}`;
@@ -177,10 +180,11 @@ function makeHarness(
 				await script(input, run, input.customTools);
 			};
 			runs.set(input.agent.name, run);
+			inputs.push(input);
 			return run.channel;
 		},
 	};
-	return { deps, runs, cwd };
+	return { deps, runs, inputs, cwd };
 }
 
 function spawn(harness: Harness, request: Parameters<typeof spawnAgents>[0]): Promise<SpawnResult[]> {
@@ -427,6 +431,47 @@ test("usage from a sibling-induced turn is included in the final result", async 
 	const results = await spawn(harness, BOTH_TASKS);
 
 	assert.equal(results[1]?.usage?.input, 99, "the induced turn's billing is counted");
+});
+
+test("a resumed task continues the stored transcript", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	const results = await spawn(harness, {
+		tasks: [{ agent: "writer", task: "continue", resume_run_id: "stored-1" }],
+	});
+
+	assert.equal(harness.inputs[0]?.resumeSessionFile, "/sessions/stored-1.jsonl");
+	assert.equal(results[0]?.resumed_from, "stored-1");
+});
+
+test("an unknown run id fails the whole call before anything starts", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	await assert.rejects(
+		() => spawn(harness, { tasks: [{ agent: "writer", task: "continue", resume_run_id: "ghost" }] }),
+		/unknown run id 'ghost'/,
+	);
+	assert.equal(harness.runs.size, 0);
+});
+
+test("a resumed run reports only the usage billed after it resumed", async () => {
+	const history = { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 1 };
+	const added = { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.25 };
+	const harness = makeHarness(DEFINITIONS, async (_input, run) => {
+		run.usage = { input: 110, output: 55, cacheRead: 0, cacheWrite: 0, cost: 1.25 };
+	});
+	const create = harness.deps.createChannel;
+	harness.deps.createChannel = async (input) => {
+		const channel = await create(input);
+		const run = harness.runs.get(input.agent.name);
+		assert.ok(run);
+		run.usage = history;
+		return channel;
+	};
+
+	const results = await spawn(harness, {
+		tasks: [{ agent: "writer", task: "continue", resume_run_id: "stored-1" }],
+	});
+
+	assert.deepEqual(results[0]?.usage, added);
 });
 
 test("progress frames report every live run until the call returns", async () => {

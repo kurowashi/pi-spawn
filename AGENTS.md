@@ -21,6 +21,8 @@
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `MAX_DESCRIPTION_CHARS` |
 | トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `MAX_TOP_LEVEL_PARAMETERS` |
+| resume は永続化済みの run だけを対象にする(run id = セッション id、`cwd` 一致で探索) | `test/unit/spawn-tool.test.ts` の `findRunSession` | `src/tools/spawn-agents.ts` |
+| 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
 | 配布物は `src/` と `package.json` / `README.md` のみ | `test/ci/package-contents.test.ts` | `package.json` の `files` |
 | `enum` / `namespace` / parameter properties を使わない | `npx tsc --noEmit` | `tsconfig.json` の `erasableSyntaxOnly` |
 | 型は `any` なし、非null断言なし、浮いた Promise なし | `npx biome check .` | `biome.jsonc` の `suspicious` / `nursery` |
@@ -31,7 +33,7 @@
 
 ## 変更時の手順
 
-- ツールを増やす・引数を増やす場合は、先に ADR を起こして決定を記録し、`TOKEN_BUDGET` を更新する。
+- ツールを増やす・引数を増やす場合は、先に `docs/adr/` に ADR を起こして決定を記録し、`TOKEN_BUDGET` を更新する。
   予算は「上げるもの」ではなく「交渉するもの」として扱う。上げた理由は ADR に残す。
 - 依存を追加する場合は devDependency のみ可能。allowlist の更新と ADR をセットで行う。
   実行時依存(`dependencies`)の追加は不可。
@@ -52,3 +54,5 @@
    `pi --session <path>` で開けること。`context: "fork"` の子は親の履歴から始まること。
 5. 子の実行中に `spawn_agents` の表示が1秒ごとに更新されること。完了後、親セッションのコスト統計に
    子の使用量が加算されていること(`/session` で確認)。
+6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が
+   返ること。`session_file` が前回と同じで、usage が再開後の分だけであること。

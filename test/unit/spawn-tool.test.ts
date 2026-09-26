@@ -6,9 +6,13 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import {
+	findRunSession,
 	formatElapsed,
 	formatProgress,
 	progressResult,
@@ -129,11 +133,50 @@ test("the spawn context streams progress through the tool update callback", () =
 		cwd: "/work",
 		sessionManager: { getEntries: () => [], getSessionFile: () => undefined },
 	} as unknown as ExtensionContext;
-	const context = spawnContext(ctx, { tasks: [{ agent: "writer", task: "write" }] }, undefined, (result) =>
-		void updates.push(result),
+	const context = spawnContext(
+		ctx,
+		{ tasks: [{ agent: "writer", task: "write" }] },
+		undefined,
+		(result) => void updates.push(result),
 	);
 
 	assert.ok(context.onProgress);
 	context.onProgress([progress()]);
 	assert.equal(updates.length, 1);
+});
+
+/** A flushed session needs one assistant message, matching Pi's own write policy. */
+function assistantMessage(): Parameters<SessionManager["appendMessage"]>[0] {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text: "hi" }],
+		api: "anthropic-messages",
+		provider: "fixture",
+		model: "fixture/model",
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+test("findRunSession resolves the run id recorded as the session id", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-spawn-lookup-"));
+	const cwd = process.cwd();
+	const manager = SessionManager.create(cwd, dir, { id: "deadbeef" });
+	manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+	manager.appendMessage(assistantMessage());
+	try {
+		assert.equal(findRunSession(dir, cwd, "deadbeef"), manager.getSessionFile());
+		assert.equal(findRunSession(dir, join(cwd, "elsewhere"), "deadbeef"), undefined, "lookup is cwd-scoped");
+		assert.equal(findRunSession(dir, cwd, "cafebabe"), undefined);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

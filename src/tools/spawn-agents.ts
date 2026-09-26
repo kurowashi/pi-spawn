@@ -14,6 +14,7 @@ import {
 	defineTool,
 	type ExtensionContext,
 	getAgentDir,
+	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import type { RunRegistry } from "../registry.ts";
@@ -35,6 +36,7 @@ const Task = Type.Object(
 		task: Type.String({ description: "What that agent should do" }),
 		model: Type.Optional(Type.String({ description: "Override model: provider/id" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for that agent" })),
+		resume_run_id: Type.Optional(Type.String({ description: "Continue a previous run id" })),
 	},
 	{ additionalProperties: false },
 );
@@ -186,21 +188,28 @@ export function totalUsage(results: readonly SpawnResult[]): ToolUsage | undefin
 /** The real dependency bundle, bound to the live parent context. */
 function buildDependencies(
 	options: SpawnToolOptions,
-	ctx: { model: unknown; modelRegistry: { getAvailable(): readonly unknown[] } },
+	ctx: { cwd: string; model: unknown; modelRegistry: { getAvailable(): readonly unknown[] } },
 	agentDir: string,
 ): SpawnDependencies {
 	const available = ctx.modelRegistry.getAvailable().filter(isModelIdentity);
 	const parent = isModelIdentity(ctx.model) ? ctx.model : undefined;
+	const sessionDir = join(agentDir, "spawn-sessions");
 	return {
 		agentDir,
 		availableModels: available,
 		parentModel: parent,
 		registry: options.registry,
-		sessionDir: join(agentDir, "spawn-sessions"),
+		sessionDir,
+		findRunSession: (runId, cwd) => findRunSession(sessionDir, cwd, runId),
 		nextRunId: options.nextRunId ?? (() => crypto.randomUUID().replaceAll("-", "").slice(0, 8)),
 		createChannel: (input) => createChildChannel(input),
 		childTool: (runId, self, registry) => createMessageAgentTool({ runId, self, registry }),
 	};
+}
+
+/** Find a persisted child transcript by the run id used as its session id. */
+export function findRunSession(sessionDir: string, cwd: string, runId: string): string | undefined {
+	return SessionManager.findById(cwd, runId, sessionDir);
 }
 
 function isModelIdentity(value: unknown): value is { provider: string; id: string } {

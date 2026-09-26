@@ -34,6 +34,8 @@ export interface SpawnTask {
 	task: string;
 	model?: string;
 	cwd?: string;
+	/** Run id of a persisted run to continue instead of starting fresh. */
+	resume_run_id?: string;
 }
 
 /** Token and cost totals billed to one run. The SDK's Usage, reduced to the fields a child reports. */
@@ -76,6 +78,8 @@ export interface SpawnResult {
 	progress?: { activity: string; elapsed_ms: number };
 	/** Tokens and cost billed to this run, including sibling-induced turns. */
 	usage?: RunUsage;
+	/** Present when the run continued a previous run's transcript. */
+	resumed_from?: string;
 	/** Persisted child transcript, when the run was file-backed. */
 	session_file?: string;
 }
@@ -121,4 +125,6 @@ export interface RunHandle {
 	induced: Set<Promise<void>>;
 	/** Failures from induced turns, reported on this run's result. */
 	inducedErrors: string[];
+	/** Usage already billed before this run started; a resumed run reports only the delta. */
+	usageBase: RunUsage;
 }

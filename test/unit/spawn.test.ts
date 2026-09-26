@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractAssistantText, resolveModel, selectActiveTools } from "../../src/spawn.ts";
+import { extractAssistantText, resolveModel, selectActiveTools, subtractUsage } from "../../src/spawn.ts";
 
 const available = [
 	{ provider: "fixture", id: "parent" },
@@ -127,4 +127,22 @@ test("a declared tool list always keeps the injected child tool", () => {
 test("a declared tool list is deduplicated", () => {
 	assert.deepEqual(selectActiveTools(["read", "read"], ["message_agent"]), ["read", "message_agent"]);
 	assert.deepEqual(selectActiveTools([], ["message_agent"]), ["message_agent"]);
+});
+
+test("subtracts the base usage so a resumed run reports only its own turns", () => {
+	assert.deepEqual(
+		subtractUsage(
+			{ input: 15, output: 25, cacheRead: 5, cacheWrite: 7, cost: 0.75 },
+			{ input: 10, output: 20, cacheRead: 2, cacheWrite: 3, cost: 0.5 },
+		),
+		{ input: 5, output: 5, cacheRead: 3, cacheWrite: 4, cost: 0.25 },
+	);
+	// A stored session never bills less than its base; a negative delta is clamped to zero.
+	assert.deepEqual(
+		subtractUsage(
+			{ input: 1, output: 1, cacheRead: 1, cacheWrite: 1, cost: 0.1 },
+			{ input: 2, output: 2, cacheRead: 2, cacheWrite: 2, cost: 0.2 },
+		),
+		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
+	);
 });

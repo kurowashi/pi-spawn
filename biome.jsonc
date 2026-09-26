@@ -9,7 +9,9 @@
 	"files": {
 		// Code only. Config files are validated by their own tools (npm, tsc, Biome schema)
 		// and reformatting them explodes readable one-line arrays into noise.
-		"includes": ["src/**", "test/**"]
+		// node_modules is force-ignored: the type-aware scanner follows the SDK type
+		// graph there and overflows its worker stack.
+		"includes": ["src/**", "test/**", "!!node_modules"]
 	},
 	"formatter": {
 		"enabled": true,
