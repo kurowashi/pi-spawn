@@ -24,6 +24,8 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * and fails a new tool or a new option bag, which is the point.
  *
  * After ADR 0001 (resume): 329 tokens (spawn_agents 234, message_agent 95).
+ *
+ * After the description review: 343 tokens (spawn_agents 248, message_agent 95).
  */
 const TOKEN_BUDGET = 400;
 

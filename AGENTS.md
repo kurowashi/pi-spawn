@@ -23,6 +23,7 @@
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_DESCRIPTION_CHARS` |
 | トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_TOP_LEVEL_PARAMETERS` |
+| カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
 | resume は永続化済みの run だけを対象にする(run id = セッション id、`cwd` 一致で探索) | `test/unit/spawn-tool.test.ts` の `findRunSession` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
 | 配布物は `src/` と `package.json` / `README.md` のみ | `test/ci/package-contents.test.ts` | `package.json` の `files` |
@@ -58,3 +59,24 @@
    子の使用量が加算されていること(`/session` で確認)。
 6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が
    返ること。`session_file` が前回と同じで、usage が再開後の分だけであること。
+
+## 手動レビュー(自動検証の対象外): ツール面の必要十分性
+
+トークン予算は契約テストが守るが、「そのコストが機能と実使用に見合うか」は自動化できない。
+ツール面(説明・スキーマ・引数・カタログ)を変えた時と、定期的に確認する:
+
+1. 計測: `spawn_agents` / `message_agent` の `name + description + JSON.stringify(parameters)`
+   とカタログ行を、`test/contract/budget.test.ts` の `tokensOf` と同じ式(4文字=1トークン)で
+   ツール別・引数別に集計する。
+2. 実使用: `~/.pi/agent/sessions/**/*.jsonl` と `~/.pi/agent/spawn-sessions/*.jsonl` を JSONL と
+   して読み、`role: "assistant"` の `content[].type == "toolCall"` を集計する。ツール別の
+   呼び出し回数、`tasks[]` の各フィールドと `context` / `timeout_seconds` の使用率、
+   `role: "toolResult"` のエラー(`details.error` か `Validation failed for tool`)を出す。
+   - 開発セッションの意図的な不正 agent テストは誤用と数えず、通常利用と分ける。
+   - 文字列 grep で `"name":"spawn_agents"` を数えると、システムプロンプトの `toolsAdded` を
+     拾って過大になる。必ず toolCall パートをパースする。
+3. 判定: トークン占有率と使用率を突き合わせる。
+   - 余剰候補: トークンが大きく使用率が低い引数(`model` / `resume_run_id` 等)。
+   - 不足: 誤用エラー。エラー本文が回復情報(定義済み agent 一覧等)を返せているか。
+   - カタログは agent 定義数に比例して伸びるため、定義を増やした時に測る。
+4. 記録: 計測値は契約テストのコメントに反映する(変更時の手順と同じ)。

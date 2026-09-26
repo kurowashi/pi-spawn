@@ -189,3 +189,12 @@ test("formats a one-line catalog from the definitions as written", () => {
 	assert.ok(line.includes(`reviewer — ${"x".repeat(80)}`));
 	assert.ok(line.includes("writer"));
 });
+
+test("the catalog lists a duplicated name once, matching spawn resolution", () => {
+	const agentDir = makeAgentDir({
+		"a-general.md": "---\nname: reviewer\ndescription: Researches.\n---\n",
+		"b-review.md": "---\nname: reviewer\ndescription: Reviews.\n---\n",
+	});
+	const { agents } = discoverAgents(agentDir);
+	assert.equal(formatCatalog(agents), "agents: reviewer — Researches.");
+});

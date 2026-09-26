@@ -28,7 +28,9 @@ import {
 import type { RunProgress, SpawnResult } from "../types.ts";
 import { childTools } from "./child-tools.ts";
 
-export const DESCRIPTION = "Spawn 1..N child agents in parallel and wait for all results. They can message each other.";
+export const DESCRIPTION =
+	"Spawn 1..N child agents in parallel and wait for all results. Use for independent subtasks that need no parent input. " +
+	"They can message each other.";
 
 const Task = Type.Object(
 	{

@@ -99,13 +99,19 @@ export function discoverAgents(agentDir: string): Catalog {
 	return { agents, warnings };
 }
 
-/** The one-line catalog injected into the system prompt. Its size follows the definitions. */
+/**
+ * The one-line catalog injected into the system prompt. Its size follows the definitions.
+ * A duplicated name is listed once — the first definition, matching spawn resolution.
+ */
 export function formatCatalog(agents: AgentDefinition[]): string | undefined {
 	if (agents.length === 0) return undefined;
-	const lines = agents.map((agent) => {
-		if (agent.description.length === 0) return agent.name;
-		return `${agent.name} — ${agent.description}`;
-	});
+	const seen = new Set<string>();
+	const lines: string[] = [];
+	for (const agent of agents) {
+		if (seen.has(agent.name)) continue;
+		seen.add(agent.name);
+		lines.push(agent.description.length === 0 ? agent.name : `${agent.name} — ${agent.description}`);
+	}
 	return `agents: ${lines.join("; ")}`;
 }
 
