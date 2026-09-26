@@ -1,9 +1,9 @@
 /**
- * Contract: the model-facing surface stays exactly what v1 decided.
+ * Contract: the model-facing surface stays exactly what the ADRs decided.
  *
- * The parent registers one tool; children receive a second one as a custom tool.
- * Both are checked here, because both are paid for on every request inside the
- * session that sees them.
+ * The parent registers one tool. A child always receives the messaging tool and,
+ * only with a dialog UI, the human-question tool. Every tool is checked here,
+ * because the session that sees it pays for it on every request.
  *
  */
 
@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
-import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
+import { childTools } from "../../src/tools/child-tools.ts";
 import { loadSpawnTools } from "../helpers/extension.ts";
 
 /** The parent-facing surface. Adding a tool is a decision that updates this list. */
@@ -23,9 +23,14 @@ const MAX_DESCRIPTION_CHARS = 160;
 /** Top-level parameters per tool. A tool needing more is probably two tools. */
 const MAX_TOP_LEVEL_PARAMETERS = 3;
 
-/** The child-facing surface, built exactly as spawn_agents builds it. */
-function childTool(): ToolDefinition {
-	return createMessageAgentTool({ runId: "test", self: {}, registry: createRunRegistry() });
+/** The child-facing surface with a dialog UI, built exactly as spawn_agents builds it. */
+function childToolsWithUi(): ToolDefinition[] {
+	return childTools({ runId: "test", self: {}, registry: createRunRegistry(), askUser: async (question) => question });
+}
+
+/** The child-facing surface without a dialog UI. */
+function childToolsWithoutUi(): ToolDefinition[] {
+	return childTools({ runId: "test", self: {}, registry: createRunRegistry() });
 }
 
 /** The subset of JSON Schema this contract reads from a TypeBox schema. */
@@ -44,14 +49,22 @@ test("the parent registers exactly one delegation tool", async () => {
 	assert.deepEqual([...tools.keys()].sort(), EXPECTED_PARENT_TOOLS);
 });
 
-test("children receive exactly one tool, and it is not a spawn tool", () => {
-	const tool = childTool();
-	assert.equal(tool.name, "message_agent");
-	assert.ok(!tool.name.includes("spawn"), "a child must never be able to spawn a grandchild");
+test("children receive the messaging tool, plus the ask tool only with a dialog UI", () => {
+	assert.deepEqual(
+		childToolsWithUi().map((tool) => tool.name),
+		["message_agent", "ask_user"],
+	);
+	assert.deepEqual(
+		childToolsWithoutUi().map((tool) => tool.name),
+		["message_agent"],
+	);
+	for (const tool of childToolsWithUi()) {
+		assert.ok(!tool.name.includes("spawn"), "a child must never be able to spawn a grandchild");
+	}
 });
 
 test("every tool has label, description, and schema", async () => {
-	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	const tools = [...(await loadSpawnTools()).values(), ...childToolsWithUi()];
 	for (const tool of tools) {
 		assert.ok(tool.label.length > 0, `${tool.name} needs a label`);
 		assert.ok(tool.description.length > 0, `${tool.name} needs a description`);
@@ -60,7 +73,7 @@ test("every tool has label, description, and schema", async () => {
 });
 
 test("descriptions stay within the per-tool character cap", async () => {
-	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	const tools = [...(await loadSpawnTools()).values(), ...childToolsWithUi()];
 	for (const tool of tools) {
 		assert.ok(
 			tool.description.length <= MAX_DESCRIPTION_CHARS,
@@ -70,7 +83,7 @@ test("descriptions stay within the per-tool character cap", async () => {
 });
 
 test("schemas are closed and stay within the parameter cap", async () => {
-	const tools = [...(await loadSpawnTools()).values(), childTool()];
+	const tools = [...(await loadSpawnTools()).values(), ...childToolsWithUi()];
 	for (const tool of tools) {
 		const schema = schemaOf(tool);
 		assert.equal(schema.additionalProperties, false, `${tool.name} must reject unknown parameters`);

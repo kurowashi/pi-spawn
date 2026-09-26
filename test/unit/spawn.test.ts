@@ -4,7 +4,13 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractAssistantText, resolveModel, selectActiveTools, subtractUsage } from "../../src/spawn.ts";
+import {
+	createAskQueue,
+	extractAssistantText,
+	resolveModel,
+	selectActiveTools,
+	subtractUsage,
+} from "../../src/spawn.ts";
 
 const available = [
 	{ provider: "fixture", id: "parent" },
@@ -127,6 +133,40 @@ test("a declared tool list always keeps the injected child tool", () => {
 test("a declared tool list is deduplicated", () => {
 	assert.deepEqual(selectActiveTools(["read", "read"], ["message_agent"]), ["read", "message_agent"]);
 	assert.deepEqual(selectActiveTools([], ["message_agent"]), ["message_agent"]);
+});
+
+test("the ask queue runs one question at a time", async () => {
+	const events: string[] = [];
+	let release: (() => void) | undefined;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const ask = createAskQueue(async (question) => {
+		events.push(`start:${question}`);
+		if (question === "one") await gate;
+		events.push(`end:${question}`);
+		return question;
+	});
+
+	const first = ask("one");
+	const second = ask("two");
+	await Promise.resolve();
+	assert.deepEqual(events, ["start:one"], "the second question waits for the first");
+
+	release?.();
+	assert.equal(await first, "one");
+	assert.equal(await second, "two");
+	assert.deepEqual(events, ["start:one", "end:one", "start:two", "end:two"]);
+});
+
+test("a failed question does not block the next one", async () => {
+	const ask = createAskQueue(async (question) => {
+		if (question === "bad") throw new Error("dialog failed");
+		return question;
+	});
+
+	await assert.rejects(() => ask("bad"), /dialog failed/);
+	assert.equal(await ask("good"), "good");
 });
 
 test("subtracts the base usage so a resumed run reports only its own turns", () => {

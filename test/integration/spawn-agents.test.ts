@@ -14,7 +14,7 @@ import { test } from "node:test";
 import type { AgentToolResult, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
 import { type CreateChannelInput, type SpawnDependencies, spawnAgents } from "../../src/spawn.ts";
-import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
+import { childTools } from "../../src/tools/child-tools.ts";
 import type { AgentChannel, RunProgress, SpawnResult } from "../../src/types.ts";
 
 /* ------------------------------------------------------------------ */
@@ -171,7 +171,7 @@ function makeHarness(
 			counter += 1;
 			return `run-${counter}`;
 		},
-		childTool: (runId, self, runRegistry) => createMessageAgentTool({ runId, self, registry: runRegistry }),
+		childTools: (input) => childTools(input),
 		createChannel: async (input) => {
 			const run = createFakeRun(input.agent.name);
 			run.channel.prompt = async (text) => {
@@ -505,4 +505,70 @@ test("progress frames report every live run until the call returns", async () =>
 		"interval frames see each run's latest activity",
 	);
 	assert.equal(typeof frames.at(-1)?.[0]?.elapsed_ms, "number");
+});
+
+test("a child can ask the user and receives the answer", async () => {
+	const questions: string[] = [];
+	const harness = makeHarness(DEFINITIONS, async (input, run, tools) => {
+		if (input.agent.name !== "writer") return;
+		const tool = tools.find((candidate) => candidate.name === "ask_user");
+		assert.ok(tool, "a dialog UI gives the child the ask tool");
+		run.output = textOf(await callTool(tool, { question: "Which file?" }));
+	});
+
+	const results = await spawnAgents(
+		{ tasks: [{ agent: "writer", task: "write" }] },
+		{
+			cwd: harness.cwd,
+			askUser: async (question) => {
+				questions.push(question);
+				return "README.md";
+			},
+		},
+		harness.deps,
+	);
+
+	assert.deepEqual(questions, ["Which file?"]);
+	assert.equal(results[0]?.output, "README.md");
+});
+
+test("concurrent questions reach the user one at a time", async () => {
+	const questions: string[] = [];
+	let active = 0;
+	let maxActive = 0;
+	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
+		const tool = tools.find((candidate) => candidate.name === "ask_user");
+		assert.ok(tool);
+		await callTool(tool, { question: `${input.agent.name}?` });
+	});
+
+	await spawnAgents(
+		BOTH_TASKS,
+		{
+			cwd: harness.cwd,
+			askUser: async (question) => {
+				questions.push(question);
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				active -= 1;
+				return question;
+			},
+		},
+		harness.deps,
+	);
+
+	assert.equal(maxActive, 1, "questions are serialized");
+	assert.deepEqual([...questions].sort(), ["reviewer?", "writer?"]);
+});
+
+test("without a dialog UI the child receives only the messaging tool", async () => {
+	let names: string[] = [];
+	const harness = makeHarness(DEFINITIONS, async (_input, _run, tools) => {
+		names = tools.map((tool) => tool.name);
+	});
+
+	await spawn(harness, { tasks: [{ agent: "writer", task: "write" }] });
+
+	assert.deepEqual(names, ["message_agent"]);
 });

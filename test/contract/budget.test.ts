@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
-import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
+import { childTools } from "../../src/tools/child-tools.ts";
 import { loadSpawnTools } from "../helpers/extension.ts";
 
 /**
@@ -22,6 +22,9 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * Measured baseline when the budget was set: 308 tokens
  * (spawn_agents 218, message_agent 90). The cap leaves room for wording changes
  * and fails a new tool or a new option bag, which is the point.
+ *
+ * After ADR 0001 (resume) and ADR 0002 (ask_user): 381 tokens
+ * (spawn_agents 234, message_agent 95, ask_user 52).
  */
 const TOKEN_BUDGET = 400;
 
@@ -34,7 +37,7 @@ function tokensOf(name: string, tool: ToolDefinition): number {
 test("model-facing tool surface stays inside the token budget", async () => {
 	const tools = [
 		...(await loadSpawnTools()).values(),
-		createMessageAgentTool({ runId: "t", self: {}, registry: createRunRegistry() }),
+		...childTools({ runId: "t", self: {}, registry: createRunRegistry(), askUser: async (question) => question }),
 	];
 
 	let total = 0;

@@ -26,7 +26,7 @@ import {
 	spawnAgents,
 } from "../spawn.ts";
 import type { RunProgress, SpawnResult } from "../types.ts";
-import { createMessageAgentTool } from "./message-agent.ts";
+import { childTools } from "./child-tools.ts";
 
 export const DESCRIPTION = "Spawn 1..N child agents in parallel and wait for all results. They can message each other.";
 
@@ -103,8 +103,19 @@ export function spawnContext(
 		...(signal === undefined ? {} : { signal }),
 		...(params.context === "fork" ? { parentEntries: [...ctx.sessionManager.getEntries()] } : {}),
 		...(parentSessionFile === undefined ? {} : { parentSessionFile }),
+		...(ctx.hasUI ? { askUser: (question: string) => askWithUI(ctx, question) } : {}),
 		...(onUpdate === undefined ? {} : { onProgress: (progress) => onUpdate(progressResult(progress)) }),
 	};
+}
+
+/** Returned to a child whose question the user did not answer. */
+const NO_ANSWER_GUIDANCE =
+	"The user did not answer. Continue with your best judgement and state the assumption in your result.";
+
+/** The dialog answer, or guidance the child can proceed with when the user cancels. */
+async function askWithUI(ctx: ExtensionContext, question: string): Promise<string> {
+	const answer = await ctx.ui.input(question);
+	return answer === undefined || answer.trim().length === 0 ? NO_ANSWER_GUIDANCE : answer;
 }
 
 /** One readable block per run; failures are labeled, never dropped. */
@@ -203,7 +214,7 @@ function buildDependencies(
 		findRunSession: (runId, cwd) => findRunSession(sessionDir, cwd, runId),
 		nextRunId: options.nextRunId ?? (() => crypto.randomUUID().replaceAll("-", "").slice(0, 8)),
 		createChannel: (input) => createChildChannel(input),
-		childTool: (runId, self, registry) => createMessageAgentTool({ runId, self, registry }),
+		childTools: (input) => childTools(input),
 	};
 }
 

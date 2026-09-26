@@ -76,12 +76,13 @@ thinking: high
 
 ```text
 spawn_agents({
-  tasks: [{ agent, task, model?, cwd? }, ...],
+  tasks: [{ agent, task, model?, cwd?, resume_run_id? }, ...],
   context?: "fresh" | "fork",
   timeout_seconds?: number
 })
 
 message_agent({ to, text, wait_for_reply? })   // 子のみ
+ask_user({ question })                        // 子のみ、対話 UI があるとき
 ```
 
 | 引数 | 場所 | 意味 |
@@ -94,6 +95,7 @@ message_agent({ to, text, wait_for_reply? })   // 子のみ
 | `resume_run_id` | `tasks[]`(任意) | 以前の run の続きとして実行する。run id は結果の見出しに載る |
 | `timeout_seconds` | `spawn_agents`(任意) | 呼び出し全体の制限時間(秒)。過ぎたら全子を中断する |
 | `to` / `text` / `wait_for_reply` | `message_agent`(子のみ) | 宛先(agent 名か run id)/ 本文 / 返信を待つか(既定 false) |
+| `question` | `ask_user`(子のみ、対話 UI 時) | 人間への質問。回答がそのままツール結果になる |
 
 単独で委譲する:
 
@@ -128,6 +130,10 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 別の `cwd` で spawn した run を再開するときは同じ `cwd` を渡す。使用量は再開後に請求された分だけが
 加算される。再開できるのは run id をセッション id として保存した run(この機能以降の spawn)だけ。
 
+子は判断に迷ったら `ask_user` で人間に質問できる。質問は親の UI に届き、回答がそのままツール結果に
+なる。対話 UI の無い print / JSON モードでは `ask_user` は注入されない。ユーザーが回答しなかった
+場合は「仮定を明示して進める」というガイダンスが返る。
+
 ## できること
 
 | できる | 内容 |
@@ -136,6 +142,7 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | 並列委譲 | 複数件を同時に走らせ、全員の完了を待って全結果を受け取る |
 | 失敗の切り分け | 子の失敗はその子の結果に `error` として入り、兄弟の結果は失われない |
 | 再開 | 永続化された run を `resume_run_id` で読み直し、同じ文脈の続きとして指示できる |
+| 人間への質問 | 子が `ask_user` で人間に確認し、回答を受けて続行できる(対話 UI 時のみ) |
 | 子同士の会話 | 兄弟を agent 名か run id で指定し、`wait_for_reply: true` で返信も受け取れる |
 | 兄弟の把握 | 兄弟がいる子のタスク先頭に宛先一覧が自動で付く |
 | モデル解決 | `tasks[].model` → 定義の `model` → 親セッションのモデルの順。実際に使われたモデルは結果に必ず入る |
@@ -152,15 +159,16 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | できない | 代替 |
 |---|---|
 | バックグラウンド実行(親を待たせない) | 親は待つしかない。長い作業は小さく分割して順に spawn する |
-| 子から親への質問(返答待ち) | タスク文に判断基準を書く。結果に「未決」と選択肢を書かせる |
+| 子から親モデルへの質問(返答待ち) | 人間へは `ask_user` で聞ける。親モデルは spawn 中で答えられない |
 | 親から実行中の子への指示 | タイムアウトで止めて出し直す |
 | 実行中の子の全文をその場で見る | 進捗は活動ラベルで見える。全文は完了後に `pi --session` で開く |
 | 並列での書き込み隔離 | 読み取り中心のタスクに限定する。`cwd` を分けても同一リポジトリの編集は衝突する |
 | 子の出力の自動検証 | 親がテストや差分確認を実行する |
 | コスト上限の強制 | コストは結果と Pi のセッション統計で確認できる。上限は無い |
 
-「バックグラウンド実行」は全子の完了まで親のモデルターンを止める方針のため、「子から親への
-質問」は親モデルが `spawn_agents` の実行中で返答できないため、どちらも成立しない。
+「バックグラウンド実行」は全子の完了まで親のモデルターンを止める方針のため、「子から親モデルへの
+質問」は親モデルが `spawn_agents` の実行中で返答できないため、どちらも成立しない。人間へは
+`ask_user` で聞ける。
 
 ## 開発
 

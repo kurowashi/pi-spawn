@@ -17,12 +17,13 @@
 | `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_PEER_DEPENDENCIES` |
 | devDependency は allowlist 内のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_DEV_DEPENDENCIES` |
 | 登録ツールは親の `spawn_agents` と子の `message_agent` の2つだけ | `test/contract/tool-surface.test.ts` | 同ファイルの `EXPECTED_PARENT_TOOLS` |
-| 子に注入するツールは `message_agent` の1つだけ(既定の子は拡張をロードしないため spawn 系ツールを持たない) | `test/contract/tool-surface.test.ts` + 手動確認 | `src/spawn.ts` の `noExtensions`、`src/catalog.ts` の `extensions` |
+| 子に注入するツールは `message_agent` と、対話 UI があるときだけ `ask_user`(既定の子は拡張をロードしないため spawn 系ツールを持たない) | `test/contract/tool-surface.test.ts` + 手動確認 | `src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `MAX_DESCRIPTION_CHARS` |
 | トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `MAX_TOP_LEVEL_PARAMETERS` |
 | resume は永続化済みの run だけを対象にする(run id = セッション id、`cwd` 一致で探索) | `test/unit/spawn-tool.test.ts` の `findRunSession` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
+| 人間への質問は spawn 呼び出し単位で直列化される | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `createAskQueue` |
 | 配布物は `src/` と `package.json` / `README.md` のみ | `test/ci/package-contents.test.ts` | `package.json` の `files` |
 | `enum` / `namespace` / parameter properties を使わない | `npx tsc --noEmit` | `tsconfig.json` の `erasableSyntaxOnly` |
 | 型は `any` なし、非null断言なし、浮いた Promise なし | `npx biome check .` | `biome.jsonc` の `suspicious` / `nursery` |
@@ -56,3 +57,5 @@
    子の使用量が加算されていること(`/session` で確認)。
 6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が
    返ること。`session_file` が前回と同じで、usage が再開後の分だけであること。
+7. 対話 UI で子から `ask_user` の質問が表示され、回答が子の結果に反映されること。print モードの
+   子には `ask_user` が注入されないこと。

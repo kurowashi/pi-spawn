@@ -19,6 +19,7 @@ import type { RunRegistry } from "./registry.ts";
 import type {
 	AgentChannel,
 	AgentDefinition,
+	AskUser,
 	RunHandle,
 	RunProgress,
 	RunUsage,
@@ -116,6 +117,15 @@ export interface SelfReference {
 	current?: RunHandle;
 }
 
+/** Everything the child-facing tools need for one run. */
+export interface ChildToolInput {
+	runId: string;
+	self: SelfReference;
+	registry: RunRegistry;
+	/** Human dialog for ask_user; absent when the session has no dialog UI. */
+	askUser?: AskUser;
+}
+
 export interface SpawnDependencies {
 	agentDir: string;
 	availableModels: readonly ModelIdentity[];
@@ -127,7 +137,7 @@ export interface SpawnDependencies {
 	findRunSession(runId: string, cwd: string): string | undefined;
 	nextRunId(): string;
 	createChannel(input: CreateChannelInput): Promise<AgentChannel>;
-	childTool(runId: string, self: SelfReference, registry: RunRegistry): ToolDefinition;
+	childTools(input: ChildToolInput): ToolDefinition[];
 }
 
 export interface SpawnRequest {
@@ -142,6 +152,8 @@ export interface SpawnContext {
 	parentEntries?: FileEntry[];
 	/** Parent session file, when the parent is persisted. */
 	parentSessionFile?: string;
+	/** Human dialog for child questions; absent when the session has no dialog UI. */
+	askUser?: AskUser;
 	/** Called once immediately, then every interval, with each live run's state. */
 	onProgress?: (progress: readonly RunProgress[]) => void;
 	/** Progress refresh interval; tests shorten it. Default: 1000ms. */
@@ -212,6 +224,20 @@ export async function spawnAgents(
 	}
 }
 
+/** Serialize human questions so concurrent runs never race for one dialog. */
+export function createAskQueue(ask: AskUser): AskUser {
+	let tail: Promise<unknown> = Promise.resolve();
+	return (question) => {
+		const next = tail.then(() => ask(question));
+		// The chain survives a failed question; the caller still receives the failure.
+		tail = next.then(
+			() => undefined,
+			() => undefined,
+		);
+		return next;
+	};
+}
+
 /** Create one channel per plan. Nothing this helper created survives a failure inside it. */
 async function startRuns(
 	planned: readonly PlannedRun[],
@@ -220,6 +246,7 @@ async function startRuns(
 	deps: SpawnDependencies,
 ): Promise<Array<{ run: PlannedRun; handle: RunHandle }>> {
 	const started: Array<{ run: PlannedRun; handle: RunHandle }> = [];
+	const askUser = spawnContext.askUser === undefined ? undefined : createAskQueue(spawnContext.askUser);
 	const outcomes = await Promise.allSettled(
 		planned.map(async (run) => {
 			const self: SelfReference = {};
@@ -229,7 +256,12 @@ async function startRuns(
 				cwd: run.cwd,
 				agentDir: deps.agentDir,
 				model: run.model,
-				customTools: [deps.childTool(run.runId, self, deps.registry)],
+				customTools: deps.childTools({
+					runId: run.runId,
+					self,
+					registry: deps.registry,
+					...(askUser === undefined ? {} : { askUser }),
+				}),
 				...(request.context === "fork" && spawnContext.parentEntries !== undefined
 					? { forkEntries: spawnContext.parentEntries }
 					: {}),
