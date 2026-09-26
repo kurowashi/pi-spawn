@@ -4,51 +4,77 @@
 設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラグイン群共通)に書きます。
 
 ここには、壊してはいけない制約と、制約に触れる変更の手順だけを書きます。制約の正はテストで、
-下表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
+下の表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
 制約として書かず、自動テストできない範囲は末尾に分けます。
 
 ## 完了条件
 
 `npm run verify`(= `npm run check` + `npm test` + `npm run test:coverage`)が通ること。
-フックが通っても CI が通らなければ未完了。下表の「検証」列は個別の検証箇所であり、
-自動検証はすべて `verify` に含まれます。
+フックが通っても CI が通らなければ未完了。CI は同じ `verify` を Node 22.19 / 24 で実行します。
+カバレッジは `test/unit` と `test/integration` で計測します。下の表の「検証」列は個別の検証箇所で
+あり、自動検証はすべて `verify` に含まれます。
 
 ## 制約
+
+### ツール面
+
+| 制約 | 検証 | 定義・実装箇所 |
+|---|---|---|
+| ツール面は `spawn_agents`(親)/ `message_agent`(子)の2つだけ | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `EXPECTED_PARENT_TOOLS`、`src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
+| ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | `test/contract/budget.test.ts` の `TOKEN_BUDGET`(計測値はコメント) |
+| ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_DESCRIPTION_CHARS` |
+| トップレベル引数は 3 個以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_TOP_LEVEL_PARAMETERS` |
+| スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `src/tools/*.ts` |
+
+### カタログ・resume・usage
+
+| 制約 | 検証 | 定義・実装箇所 |
+|---|---|---|
+| カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
+| resume は永続化済みの run だけを対象にする(run id = セッション id) | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
+| resume の探索は `cwd` 一致で行う | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
+| 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
+
+### 依存関係・import
 
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | 実行時依存を持たない(`dependencies` は空) | `test/contract/dependencies.test.ts` | `package.json` |
-| `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_PEER_DEPENDENCIES` |
-| devDependency は allowlist 内のみ | `test/contract/dependencies.test.ts` | 同ファイルの `ALLOWED_DEV_DEPENDENCIES` |
-| ツール面は `spawn_agents`(親)/ `message_agent`(子)の2つだけ | `test/contract/tool-surface.test.ts` | 同ファイルの `EXPECTED_PARENT_TOOLS`、`src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
-| ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | 同ファイルの `TOKEN_BUDGET` |
-| ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_DESCRIPTION_CHARS` |
-| トップレベル引数は 3 個以内、スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | 同ファイルの `MAX_TOP_LEVEL_PARAMETERS` |
-| カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
-| resume は永続化済みの run だけを対象にする(run id = セッション id、`cwd` 一致で探索) | `test/unit/spawn-tool.test.ts` の `findRunSession` | `src/tools/spawn-agents.ts` |
-| 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
+| `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | `test/contract/dependencies.test.ts` | `test/contract/dependencies.test.ts` の `ALLOWED_PEER_DEPENDENCIES` |
+| devDependency は allowlist 内のみ | `test/contract/dependencies.test.ts` | `test/contract/dependencies.test.ts` の `ALLOWED_DEV_DEPENDENCIES` |
+
+### 配布・ビルド
+
+| 制約 | 検証 | 定義・実装箇所 |
+|---|---|---|
 | 配布物は `src/` と `package.json` / `README.md` のみ | `test/ci/package-contents.test.ts` | `package.json` の `files` |
+| ビルド工程を持たない(TS を直接配布) | `test/ci/package-contents.test.ts` | `package.json`(`build` script なし、`pi.extensions` が `./src/index.ts`) |
+
+### コード品質
+
+| 制約 | 検証 | 定義・実装箇所 |
+|---|---|---|
 | `enum` / `namespace` / parameter properties を使わない | `npx tsc --noEmit` | `tsconfig.json` の `erasableSyntaxOnly` |
 | 型は `any` なし、非null断言なし、浮いた Promise なし | `npx biome check .` | `biome.jsonc` の `suspicious` / `nursery` |
 | `console` を使わない | `npx biome check .` | `biome.jsonc` |
 | 認知複雑度は 12 以下 | `npx biome check .` | `biome.jsonc` の `noExcessiveCognitiveComplexity` |
 | 相対 import は `.ts` 拡張子付き、パスエイリアスなし | `npx tsc --noEmit` + Node 実行 | `tsconfig.json` |
-| ビルド工程を持たない(TS を直接配布) | `test/ci/package-contents.test.ts` | `package.json`(`build` script なし、`pi.extensions` が `./src/index.ts`) |
 
 ## 変更時の手順
 
 - ツールを増やす・引数を増やす場合は、`TOKEN_BUDGET` を更新する。予算は「上げるもの」ではなく
-  「交渉するもの」として扱う。上げる場合は計測値をテストのコメントに更新し、コミットメッセージに理由を残す。
+  「交渉するもの」として扱い、再導出は PHILOSOPHY.md の判断手順に従う。上げる場合は計測値を
+  テストのコメントに更新し、コミットメッセージに理由を残す。
 - 依存を追加する場合は devDependency のみ可能。allowlist の更新とコミットメッセージの理由を
   セットで行う。実行時依存(`dependencies`)の追加は不可。
 - `docs/adr/` は過去の決定の記録であり、新しい変更で ADR の追加は必須としない。
-- カバレッジは `test/unit` と `test/integration` で計測する(`package.json` の `test:coverage`)。
-  契約テストは jiti 経由で `src` をもう一度ロードするため、同じファイルが2実体として数えられる。
+- カバレッジの数値は契約テストの影響を受けます。契約テストは jiti 経由で `src` をもう一度
+  ロードするため、同じファイルが2実体として数えられます。
 
-## 手動スモークテスト(自動検証の対象外)
+## 手動確認項目(自動検証の対象外)
 
-`src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外。
-ここは実モデルでのスモークテストで確認する:
+`src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外
+です。ここは実モデルで確認します。
 
 1. 2エージェントを並列 spawn し、片方からもう片方へ `message_agent` で質問して返信が結果に現れること。
 2. `extensions: true` の agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
