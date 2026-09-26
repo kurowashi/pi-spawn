@@ -23,8 +23,7 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * (spawn_agents 218, message_agent 90). The cap leaves room for wording changes
  * and fails a new tool or a new option bag, which is the point.
  *
- * After ADR 0001 (resume) and ADR 0002 (ask_user): 381 tokens
- * (spawn_agents 234, message_agent 95, ask_user 52).
+ * After ADR 0001 (resume): 329 tokens (spawn_agents 234, message_agent 95).
  */
 const TOKEN_BUDGET = 400;
 
@@ -37,7 +36,7 @@ function tokensOf(name: string, tool: ToolDefinition): number {
 test("model-facing tool surface stays inside the token budget", async () => {
 	const tools = [
 		...(await loadSpawnTools()).values(),
-		...childTools({ runId: "t", self: {}, registry: createRunRegistry(), askUser: async (question) => question }),
+		...childTools({ runId: "t", self: {}, registry: createRunRegistry() }),
 	];
 
 	let total = 0;

@@ -67,9 +67,6 @@ export interface RunProgress {
 	usage: RunUsage;
 }
 
-/** Ask the human a question and resolve with the answer. */
-export type AskUser = (question: string) => Promise<string>;
-
 /** The result of one run. Failures are reported per run, never as a whole-call failure. */
 export interface SpawnResult {
 	agent: string;
