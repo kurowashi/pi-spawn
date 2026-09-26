@@ -45,12 +45,12 @@ export function resolveModel<T extends ModelIdentity>(input: {
 	available: readonly T[];
 }): ModelResolution<T> {
 	if (input.taskReference !== undefined) {
-		const model = findModel(input.taskReference, input.available, input.parent?.provider);
+		const model = findModel(input.taskReference, input.available);
 		if (model === undefined) return notFound("task model", input.taskReference, input.available);
 		return { model, source: "task" };
 	}
 	if (input.definitionReference !== undefined) {
-		const model = findModel(input.definitionReference, input.available, input.parent?.provider);
+		const model = findModel(input.definitionReference, input.available);
 		if (model === undefined) return notFound("agent model", input.definitionReference, input.available);
 		return { model, source: "definition" };
 	}
@@ -64,20 +64,13 @@ export function resolveModel<T extends ModelIdentity>(input: {
 	return { model: input.parent, source: "parent" };
 }
 
-/** Match `provider/id` exactly, or a bare id preferring the parent's provider. */
-function findModel<T extends ModelIdentity>(
-	reference: string,
-	available: readonly T[],
-	preferredProvider?: string,
-): T | undefined {
+/** Match `provider/id` exactly. A bare id names no provider and is not resolved. */
+function findModel<T extends ModelIdentity>(reference: string, available: readonly T[]): T | undefined {
 	const separator = reference.indexOf("/");
-	if (separator > 0) {
-		const provider = reference.slice(0, separator);
-		const id = reference.slice(separator + 1);
-		return available.find((model) => model.provider === provider && model.id === id);
-	}
-	const byId = available.filter((model) => model.id === reference);
-	return byId.find((model) => model.provider === preferredProvider) ?? byId[0];
+	if (separator <= 0) return undefined;
+	const provider = reference.slice(0, separator);
+	const id = reference.slice(separator + 1);
+	return available.find((model) => model.provider === provider && model.id === id);
 }
 
 function notFound<T extends ModelIdentity>(
@@ -345,29 +338,21 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 	return wrapSession(session);
 }
 
-/** Restrict the child to the definition's tool list, intersected with what the session really has. */
+/** Restrict the child to the definition's tool list plus the injected tools. */
 function applyDeclaredTools(session: AgentSession, agent: AgentDefinition, customToolNames: readonly string[]): void {
 	if (agent.tools === undefined) return;
-	const available = session.getAllTools().map((tool) => tool.name);
-	session.setActiveToolsByName(selectActiveTools(agent.tools, customToolNames, available));
+	session.setActiveToolsByName(selectActiveTools(agent.tools, customToolNames));
 }
 
 /**
  * The active tool names for a child whose definition declares a tool list.
  *
  * The declared names are the author's intent and the custom names are the tools
- * this extension injects; both must survive, and neither may name something the
- * session does not actually have. A declared name that the child cannot have
- * (for example a pi-subagents-only tool) is dropped rather than failing the run.
+ * this extension injects; neither should be lost. A name the session has no tool
+ * for is dropped by `setActiveToolsByName` itself.
  */
-export function selectActiveTools(
-	declared: readonly string[],
-	customToolNames: readonly string[],
-	available: readonly string[],
-): string[] {
-	const known = new Set(available);
-	const wanted = [...declared, ...customToolNames].filter((name) => known.has(name));
-	return [...new Set(wanted)];
+export function selectActiveTools(declared: readonly string[], customToolNames: readonly string[]): string[] {
+	return [...new Set([...declared, ...customToolNames])];
 }
 
 /** Adapt AgentSession to the narrow channel this extension depends on. */

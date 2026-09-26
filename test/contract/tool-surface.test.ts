@@ -5,7 +5,6 @@
  * Both are checked here, because both are paid for on every request inside the
  * session that sees them.
  *
- * See docs/design.md and docs/adr/0002-two-tools-and-token-budget.md.
  */
 
 import assert from "node:assert/strict";

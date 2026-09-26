@@ -1,19 +1,17 @@
 # pi-spawn
 
-Pi の子エージェントを spawn し、**兄弟エージェント同士が同一プロセス内で直接メッセージをやり取り**する拡張。
-`pi-subagents` の代替として、必要なものだけを実装する。
+Pi の子エージェントを spawn し、**兄弟エージェント同士が直接メッセージをやり取り**できる拡張。
 
-- モデルに見せるツール面は 308 トークン(計測方法は [docs/foundation.md](docs/foundation.md) の「計測方法」)
-- 子セッションは同一プロセス内。非同期実行(親が結果を待たずに制御を戻す起動)・別プロセス runner・
-  run status ファイルを持たない
+- 子は並列に動き、親は全員の完了を待って結果をまとめて受け取る(バックグラウンド実行はしない)
+- 子セッションは親と同じプロセスで動く
 - 既定の子は子を spawn できない(委譲の深さは 1)。定義に `extensions: true` を書いた子だけが、拡張と一緒に `spawn_agents` を受け取る
 
 ## 動作条件
 
 | | |
 |---|---|
-| Pi | 0.87.1 で検証(ローカルパッケージとして読み込む) |
-| Node.js | `>= 22.19.0` を要求(`package.json` の `engines`) |
+| Pi | インストール済みであること。0.87.1 で検証(他のバージョンは未検証) |
+| Node.js | 22.19.0 以上 |
 
 ## インストール
 
@@ -23,8 +21,8 @@ GitHub から入れる:
 pi install git:github.com/kurowashi/pi-spawn
 ```
 
-ref を固定する場合は `pi install git:github.com/kurowashi/pi-spawn@<tag|commit>`。追加後は Pi の
-再起動で読み込まれ、`pi list` に現れる。
+ref を固定する場合は `pi install git:github.com/kurowashi/pi-spawn@<tag|commit>`。追加後は Pi を
+再起動すると読み込まれ、`pi list` に現れる。
 
 ローカルの作業コピーを使う場合は `~/.pi/agent/settings.json` の `packages` に、**その
 settings.json からの相対パス**で追加する:
@@ -35,54 +33,111 @@ settings.json からの相対パス**で追加する:
 }
 ```
 
+## エージェント定義
+
+子にする agent は `~/.pi/agent/agents/*.md` に用意する。ファイル名は任意で、frontmatter の
+`name` が呼び出し名になる。
+
+`~/.pi/agent/agents/reviewer.md` の例:
+
+```markdown
+---
+name: reviewer
+description: ドキュメントのレビュー役
+tools: read, grep
+thinking: high
+---
+
+あなたはレビュアーです。指摘は根拠とセットで返してください。
+```
+
+| キー | 必須 | 意味 |
+|---|---|---|
+| `name` | ○ | 呼び出しに使う名前 |
+| `description` | | モデルに渡す説明 |
+| `tools` | | 子に許可するツール。カンマ区切り文字列か配列。空リストなら `message_agent` のみ。無指定なら利用可能な全ツール。子に無い名前は無視される |
+| `model` | | 既定モデル。`provider/id` 形式 |
+| `thinking` | | 推論強度(off / minimal / low / medium / high / xhigh / max) |
+| `systemPromptMode` | | `append`(既定、本文を Pi のプロンプトに追加)/ `replace`(本文のみ) |
+| `inheritProjectContext` | | 作業ディレクトリの `AGENTS.md` を子に渡すか(既定 true) |
+| `inheritSkills` | | 利用可能な skills を子に渡すか(既定 true) |
+| `extensions` | | 子セッションでグローバル設定の `packages`(拡張)をロードするか(既定 false) |
+
+- 本文(例の「あなたはレビュアーです…」)は既定で Pi のシステムプロンプトに追加される
+- 未知のキー(`async` など)は警告して無視する
+- 同名の定義が複数ある場合はファイル名順で先勝ち。編集は次に spawn する子から反映される
+- 定義の一覧はモデルに `agents: <name> — <description>` の1行として注入される
+- `extensions: true` の子は MCP などの拡張をロードし、`spawn_agents` も受け取る。多段委譲は階層ごとに true が要る
+- 他の agent(`writer` など)も同じ形式で `~/.pi/agent/agents/` に作る
+
 ## 使い方
 
-単独で委譲する場合:
+親セッションから `spawn_agents` を呼ぶ。子は `message_agent` を持ち、兄弟に連絡できる。
 
-```
-spawn_agents({ tasks: [{ agent: "writer", task: "README の下書きを書いて" }] })
+```text
+spawn_agents({
+  tasks: [{ agent, task, model?, cwd? }, ...],
+  context?: "fresh" | "fork",
+  timeout_ms?: number
+})
+
+message_agent({ to, text, wait? })   // 子のみ
 ```
 
-並列に走らせ、子同士で相談させる場合:
+| 引数 | 場所 | 意味 |
+|---|---|---|
+| `tasks` | `spawn_agents` | 起動する子の一覧(1件以上)。1件なら単独委譲 |
+| `agent` / `task` | `tasks[]` | 定義の `name` / 子への指示 |
+| `model` | `tasks[]`(任意) | 子のモデルを上書き(`provider/id` 形式) |
+| `cwd` | `tasks[]`(任意) | 子の作業ディレクトリ(既定は親と同じ) |
+| `context` | `spawn_agents`(任意) | `fresh`(既定、空の文脈)/ `fork`(この会話をコピー) |
+| `timeout_ms` | `spawn_agents`(任意) | 呼び出し全体の制限時間。過ぎたら全子を中断する |
+| `to` / `text` / `wait` | `message_agent`(子のみ) | 宛先(agent 名か run id)/ 本文 / 返信を待つか(既定 false) |
 
+単独で委譲する:
+
+```text
+spawn_agents({ tasks: [{ agent: "reviewer", task: "README の下書きをレビューして" }] })
 ```
+
+並列に走らせ、子同士で相談させる:
+
+```text
 spawn_agents({
   tasks: [
     { agent: "writer", task: "下書きを書いて。不明点は reviewer に message_agent で聞くこと" },
-    { agent: "document qualitiy reviewer", task: "構成案をレビューして" }
+    { agent: "reviewer", task: "構成案をレビューして" }
   ]
 })
 ```
 
-子は `message_agent({ to: "reviewer", text: "...", wait: true })` で返信まで受け取れる。
-宛先は agent 名か run id。run id は呼び出し後に決まるため、各子のタスク先頭に
-「メッセージできる兄弟: 名前 (run id)」として自動で通知される。
+`wait: true` で送ったメッセージは、宛先の次の発話が戻り値になる(返信が無ければ 120 秒でエラー)。
+run id は呼び出しごとに決まる子の識別子。同じ agent を複数走らせたとき、agent 名での宛先は
+曖昧になるため run id を使う。兄弟がいる子のタスク先頭には宛先一覧が自動で付く:
+
+```text
+Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7b8)
+```
+
+呼び出し結果は `{ agent, run_id, model, output }` の配列。run が失敗した場合は `output` の
+代わりに `error` が入る。未知の agent や解決できない `model` は、何も起動せずにエラーになる。
 
 ## できること
 
 | できる | 内容 |
 |---|---|
-| 単一委譲 | `tasks` に1件渡し、その完了を待って出力を受け取る |
-| 並列委譲 | 1回の呼び出しで 1〜8 件を同時に走らせ、**全員の完了を待って**全結果を受け取る |
+| 単一委譲 | `tasks` に1件渡し、完了を待って出力を受け取る |
+| 並列委譲 | 複数件を同時に走らせ、全員の完了を待って全結果を受け取る |
 | 失敗の切り分け | 子の失敗はその子の結果に `error` として入り、兄弟の結果は失われない |
 | 子同士の会話 | 兄弟を agent 名か run id で指定し、`wait: true` で返信も受け取れる |
-| 兄弟の把握 | 各子のタスク先頭に「メッセージできる兄弟: 名前 (run id)」が自動で付く |
-| 文脈の選択 | `fresh`(空の文脈で開始、既定)または `fork`(この会話をコピーして開始) |
-| モデル指定 | 優先順は `tasks[].model` → 定義の `model` → 親セッションのモデル。**実際に使われたモデルは結果に必ず入る** |
-| 推論強度 | 定義の `thinking`(off / minimal / low / medium / high / xhigh / max) |
-| ツール制限 | 定義の `tools` に列挙したものと、実際に利用可能なツールの交差。`tools` が無ければ利用可能な全ツール。子に渡す `message_agent` は常に残る |
-| 子への拡張 | 定義に `extensions: true` を書いた子は、グローバル設定の `packages` にある拡張(MCP など)をロードする。既定 false。次の階層に委譲するには、その agent の定義にも `extensions: true` が要る(ADR 0006) |
-| タイムアウト | `timeout_ms` を過ぎたら全子を中断し、結果にエラーを返す |
-| 既存定義の再利用 | `~/.pi/agent/agents/*.md` を読む。対応キーのみ有効で、未知キーは警告して無視する |
-| 利用可能なエージェントの把握 | 一覧と説明がシステムプロンプトに1行で注入される |
-| 宛先の状態に依らない配送 | 実行中の兄弟には次の安全点で届く。完了済みの兄弟には新しいターンで届く |
-| 誘発ターンの完了も待つ | メッセージで始まったターンも `spawn_agents` が待ってから返る(バックグラウンド作業を残さない) |
+| 兄弟の把握 | 兄弟がいる子のタスク先頭に宛先一覧が自動で付く |
+| モデル解決 | `tasks[].model` → 定義の `model` → 親セッションのモデルの順。実際に使われたモデルは結果に必ず入る |
+| 配送 | 実行中の兄弟には今のターンの切れ目で届き、待機中の兄弟には新しいターンで届く。配送で始まったターンの完了も待ってから返る |
 | ハング防止 | 兄弟待ちのデッドロックを防ぎ、親ターンの中止にも追従する |
 
 ## できないこと
 
-すべて意図的な非目標。機能ごとの全量比較(競合3実装 + pi-subagents)は
-[docs/research.md](docs/research.md) にある。
+すべて意図的な非目標。
 
 | できない | 代替 |
 |---|---|
@@ -91,60 +146,30 @@ spawn_agents({
 | 子から親への質問(返答待ち) | タスク文に判断基準を書く。結果に「未決」と選択肢を書かせる |
 | 親から実行中の子への指示 | タイムアウトで止めて出し直す |
 | 子の様子を見る(進捗・トランスクリプト) | 子に結果へ含めさせる |
-| worktree の分離 | 読み取り中心のタスクに限定する。`cwd` を分けても同一リポジトリの並列編集の衝突は残る |
-| 受け入れゲート・検証証跡 | 親が検証する |
-| コスト・spawn 上限の統制 | Pi 本体のセッション統計 |
-| mission・定期実行・watchdog | なし |
+| 並列での書き込み隔離 | 読み取り中心のタスクに限定する。`cwd` を分けても同一リポジトリの編集は衝突する |
+| 子の出力の自動検証 | 親がテストや差分確認を実行する |
+| コスト・利用量の統制 | Pi のセッション統計で確認する |
 | 子セッションの永続化 | 必要な内容は結果に含めさせる |
 
 「バックグラウンド実行」と「子→親の質問」は、同期 spawn では親のモデルターンが停止しているため
-**構造的に成立しない**([docs/research.md](docs/research.md) の発見節)。回避策(in-process の
-バックグラウンド子)は保留として記録してあり、必要になれば ADR を起こして追加する。
-
-## エージェント定義
-
-`~/.pi/agent/agents/*.md` を pi-subagents 互換のサブセットで読む。
-
-| キー | 意味 |
-|---|---|
-| `name` | 呼び出しに使う名前(必須) |
-| `description` | システムプロンプトに注入される説明(40字まで) |
-| `tools` | 子に許可するツール。子のツール名と交差させ、無いものは落とす |
-| `model` | 既定モデル。`provider/id` 形式 |
-| `thinking` | 推論強度 |
-| `systemPromptMode` | `append`(既定、Pi のプロンプトに本文を追加)/ `replace`(本文のみ) |
-| `inheritProjectContext` | AGENTS.md を子に渡すか(既定 true) |
-| `inheritSkills` | skills を子に渡すか(既定 true) |
-| `extensions` | 子セッションでグローバル設定の `packages`(拡張)をロードするか(既定 false)。true にすると MCP ツールや `spawn_agents` も利用可能になり、`tools` で絞り込める。多段委譲は階層ごとに true が必要(ADR 0006) |
-
-未知のキー(`async` や `fallbacks` など)は警告して無視する。**対応キーだけが有効**であり、
-定義ファイルが読めることと全設定が反映されることは別である。
+成立しない。
 
 ## 開発
 
+pi-spawn 自体を開発する場合の手順。実行時依存はなく、依存はすべて devDependency。
+
 ```bash
-npm install          # 依存(すべて devDependency。実行時依存はゼロ)
-npm run verify       # 完了条件: biome + tsc + 全テスト + カバレッジ閾値
-npm test             # 全テスト
+npm install
+npm run verify        # 完了条件: biome + tsc + 全テスト + カバレッジ閾値
+npm test              # 全テスト
 npm run test:coverage # unit と integration だけをカバレッジ閾値付きで
-npm run fix          # 自動修正
+npm run fix           # 自動修正
 ```
 
-コミット前に lefthook が format/lint/型検査を実行する。CI は同じ検査を独立に実行する
-(フックは利便性のためのもので、ゲートの権威ではない)。
+コミット前に lefthook が format/lint/型検査を実行する。CI はフックと同じ検査を独立に実行する
+(フックは利便性のためのもので、ゲートの権威ではない)。ツール定義の大きさは契約テストが
+400 トークン以下に拘束する。
 
 フックの有効化は `npx lefthook install` を手動で実行する。`package.json` の lifecycle script
 (`prepare` / `postinstall`) には置かない: `pi install git:...` は `npm install --omit=dev` を
 実行するため、devDependency の lefthook が無い状態で script が走るとインストールごと失敗する。
-
-`test:coverage` が `test/unit` と `test/integration` に限定されているのは、契約テストが
-jiti 経由で `src` をもう一度ロードするため。同じファイルが2つのモジュール実体として数えられ、
-未カバー扱いになるのを避けている。契約テストは `npm test` で実行される。
-
-## 設計資料
-
-- [`docs/foundation.md`](docs/foundation.md) — 土台(ツール選定・構成・制約・CI・計測方法)
-- [`docs/research.md`](docs/research.md) — 競合3実装と pi-subagents の機能全量、実装状況
-- [`docs/design.md`](docs/design.md) — 作るもの/作らないもの、モジュール構成、作業状態
-- [`docs/adr/`](docs/adr) — 決定の記録
-- [`AGENTS.md`](AGENTS.md) — 機械的に検証できる制約のみ

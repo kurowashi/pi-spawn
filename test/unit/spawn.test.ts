@@ -46,14 +46,15 @@ test("the parent model is the last resort and is reported as such", () => {
 	assert.equal(resolution.model?.id, "parent");
 });
 
-test("a bare id prefers the parent provider", () => {
+test("a bare id is not resolved: provider/id is required", () => {
 	const resolution = resolveModel({
 		taskReference: "worker",
 		definitionReference: undefined,
 		parent: available[0],
 		available,
 	});
-	assert.equal(resolution.model?.provider, "fixture");
+	assert.equal(resolution.model, undefined);
+	assert.ok(resolution.error.includes("worker"));
 });
 
 test("an unresolvable override is an error, never a silent fallback", () => {
@@ -114,19 +115,16 @@ test("ignores anything that is not assistant text", () => {
 });
 
 test("a declared tool list always keeps the injected child tool", () => {
-	// A definition written for pi-subagents declares a tool this extension does not
-	// provide; it must be dropped without dropping the child's own message tool.
-	assert.deepEqual(
-		selectActiveTools(["read", "contact_supervisor"], ["message_agent"], ["read", "bash", "message_agent"]),
-		["read", "message_agent"],
-	);
-});
-
-test("a declared tool list is deduplicated and value-independent", () => {
-	assert.deepEqual(selectActiveTools(["read", "read"], ["message_agent"], ["read", "message_agent"]), [
+	// The session drops names it has no tool for; this merge must not drop the
+	// child's own message tool along with them.
+	assert.deepEqual(selectActiveTools(["read", "contact_supervisor"], ["message_agent"]), [
 		"read",
+		"contact_supervisor",
 		"message_agent",
 	]);
-	assert.deepEqual(selectActiveTools([], ["message_agent"], ["message_agent"]), ["message_agent"]);
-	assert.deepEqual(selectActiveTools(["ghost"], [], ["read"]), []);
+});
+
+test("a declared tool list is deduplicated", () => {
+	assert.deepEqual(selectActiveTools(["read", "read"], ["message_agent"]), ["read", "message_agent"]);
+	assert.deepEqual(selectActiveTools([], ["message_agent"]), ["message_agent"]);
 });

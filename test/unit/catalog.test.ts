@@ -1,8 +1,8 @@
 /**
  * Unit: definition discovery and frontmatter parsing.
  *
- * The parser must accept the files pi-subagents already wrote, ignore keys this
- * extension does not implement, and never let one bad file break discovery.
+ * The parser must ignore keys this extension does not implement, and never let
+ * one bad file break discovery.
  * Definitions are written to a temporary directory so the repository carries no
  * fixtures that can drift from the tests.
  */
@@ -26,7 +26,7 @@ function makeAgentDir(files: Record<string, string>): string {
 	return agentDir;
 }
 
-test("parses a pi-subagents compatible definition", () => {
+test("parses a full definition", () => {
 	const agent = parse(`---
 name: reviewer
 description: Reviews documents.
@@ -110,7 +110,7 @@ systemPromptMode: sideways
 	assert.equal(warnings.length, 2);
 });
 
-test("discovers definitions alphabetically and drops duplicate names", () => {
+test("discovers definitions alphabetically and keeps duplicates", () => {
 	const agentDir = makeAgentDir({
 		"reviewer.md": "---\nname: reviewer\ndescription: Reviews a document.\n---\nBody.\n",
 		"reviewer-copy.md": "---\nname: reviewer\ndescription: Again.\n---\n",
@@ -120,9 +120,9 @@ test("discovers definitions alphabetically and drops duplicate names", () => {
 	const { agents, warnings } = discoverAgents(agentDir);
 	assert.deepEqual(
 		agents.map((agent) => agent.name),
-		["reviewer", "writer"],
+		["reviewer", "reviewer", "writer"],
 	);
-	assert.equal(warnings.length, 2, "the duplicate name and the missing name are both reported");
+	assert.equal(warnings.length, 1, "only the missing name is reported");
 });
 
 test("a missing agents directory is not an error", () => {
@@ -152,15 +152,16 @@ test("a tools value that is neither a list nor a string is reported", () => {
 	assert.match(warnings[0] ?? "", /tools/);
 });
 
-test("blank optional values are treated as absent", () => {
+test("blank optional values are absent; a blank tool list allows no tools", () => {
 	const agent = parse(`---\nname: a\ndescription: "  "\nmodel: ""\nthinking: ""\ntools: ""\n---\n`);
 	assert.equal(agent?.description, "");
 	assert.equal(agent?.model, undefined);
 	assert.equal(agent?.thinking, undefined);
-	assert.equal(agent?.tools, undefined);
+	assert.deepEqual(agent?.tools, []);
+	assert.deepEqual(parse("---\nname: a\ntools: []\n---\n")?.tools, []);
 });
 
-test("formats a bounded one-line catalog", () => {
+test("formats a one-line catalog from the definitions as written", () => {
 	assert.equal(formatCatalog([]), undefined);
 	const line = formatCatalog([
 		{
@@ -185,8 +186,6 @@ test("formats a bounded one-line catalog", () => {
 		},
 	]);
 	assert.ok(line);
-	assert.equal(line.length < 120, true);
-	assert.ok(line.includes("reviewer — "));
+	assert.ok(line.includes(`reviewer — ${"x".repeat(80)}`));
 	assert.ok(line.includes("writer"));
-	assert.ok(!line.includes("x".repeat(41)));
 });

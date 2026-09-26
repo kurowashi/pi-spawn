@@ -1,8 +1,9 @@
 /**
  * spawn_agents — parent-only tool.
  *
- * Children never receive this tool, which fixes delegation depth at 1.
- * See docs/design.md.
+ * The default child does not receive this tool, so delegation depth stays at 1.
+ * A child whose definition sets `extensions: true` loads the extension and gets
+ * this tool too.
  */
 
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -27,7 +28,7 @@ const Task = Type.Object(
 
 const Parameters = Type.Object(
 	{
-		tasks: Type.Array(Task, { minItems: 1, maxItems: 8, description: "Tasks to run concurrently" }),
+		tasks: Type.Array(Task, { minItems: 1, description: "Tasks to run concurrently" }),
 		context: Type.Optional(
 			StringEnum(["fresh", "fork"] as const, {
 				description: "fresh: empty context (default); fork: copy this conversation",

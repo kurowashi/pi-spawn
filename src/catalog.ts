@@ -1,10 +1,10 @@
 /**
  * Agent definition discovery and parsing.
  *
- * Reads the same files as pi-subagents so existing definitions keep working
- * unmodified: `<agentDir>/agents/*.md` with YAML frontmatter. Unknown keys are
- * reported as warnings instead of failing, because such files also carry keys
- * this extension deliberately does not implement (`async`, `fallbacks`, ...).
+ * Reads `<agentDir>/agents/*.md` with YAML frontmatter. Unknown keys are
+ * reported as warnings instead of failing, because a definition file may carry
+ * keys this extension deliberately does not implement (`async`, ...).
+ * A duplicate agent name resolves to the first file in sorted order.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -94,22 +94,17 @@ export function discoverAgents(agentDir: string): Catalog {
 		}
 		const agent = parseAgent(content, path, warn);
 		if (agent === undefined) continue;
-		if (agents.some((existing) => existing.name === agent.name)) {
-			warn(`${path}: duplicate agent name '${agent.name}', ignoring this file`);
-			continue;
-		}
 		agents.push(agent);
 	}
 	return { agents, warnings };
 }
 
-/** The one-line catalog injected into the system prompt. Bounded by design. */
-export function formatCatalog(agents: AgentDefinition[], maxDescriptionChars = 40): string | undefined {
+/** The one-line catalog injected into the system prompt. Its size follows the definitions. */
+export function formatCatalog(agents: AgentDefinition[]): string | undefined {
 	if (agents.length === 0) return undefined;
 	const lines = agents.map((agent) => {
 		if (agent.description.length === 0) return agent.name;
-		const description = agent.description.slice(0, maxDescriptionChars).trimEnd();
-		return `${agent.name} — ${description}`;
+		return `${agent.name} — ${agent.description}`;
 	});
 	return `agents: ${lines.join("; ")}`;
 }
@@ -124,13 +119,12 @@ function readTools(value: unknown, path: string, warn: (message: string) => void
 		? value.filter((entry): entry is string => typeof entry === "string")
 		: typeof value === "string"
 			? value.split(",")
-			: [];
-	if (raw.length === 0) {
+			: undefined;
+	if (raw === undefined) {
 		warn(`${path}: 'tools' is neither a string list nor an array, ignoring`);
 		return undefined;
 	}
-	const tools = raw.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-	return tools.length > 0 ? tools : undefined;
+	return raw.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
 }
 
 function readThinking(value: unknown, path: string, warn: (message: string) => void): ThinkingLevel | undefined {

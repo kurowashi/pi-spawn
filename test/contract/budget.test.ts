@@ -7,7 +7,6 @@
  * budget. It replaces the need for a lazy-loading gate: the surface is small
  * enough to be always-on.
  *
- * See docs/adr/0002-two-tools-and-token-budget.md.
  */
 
 import assert from "node:assert/strict";
@@ -21,16 +20,11 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * Combined budget for every tool description plus parameter schema.
  *
  * Measured baseline when the budget was set: 308 tokens
- * (spawn_agents 218, message_agent 90), against about 5,000 for the
- * pi-subagents surface this replaces. The cap leaves room for wording changes
+ * (spawn_agents 218, message_agent 90). The cap leaves room for wording changes
  * and fails a new tool or a new option bag, which is the point.
  */
 const TOKEN_BUDGET = 400;
 
-/** Catalog injection is part of the fixed cost, so it is counted too. */
-const CATALOG_BUDGET = 120;
-
-/** Cheap, dependency-free estimate. Provider tokenizers do not change the verdict. */
 const CHARS_PER_TOKEN = 4;
 
 function tokensOf(name: string, tool: ToolDefinition): number {
@@ -56,23 +50,4 @@ test("model-facing tool surface stays inside the token budget", async () => {
 		`tool surface is ${total} tokens (${perTool.join(", ")}), budget is ${TOKEN_BUDGET}. ` +
 			"Shrink the descriptions or delete a tool before raising the budget.",
 	);
-});
-
-test("the injected agent catalog stays inside its own budget", async () => {
-	// Five agents with descriptions is a realistic ceiling for one user.
-	const agents = Array.from({ length: 5 }, (_, index) => ({
-		name: `agent-${index + 1}`,
-		description: "x".repeat(60),
-		body: "",
-		inheritProjectContext: true,
-		inheritSkills: true,
-		extensions: false,
-		systemPromptMode: "append" as const,
-		path: "p",
-	}));
-	const { formatCatalog } = await import("../../src/catalog.ts");
-	const line = formatCatalog(agents);
-	assert.ok(line);
-	const tokens = Math.ceil(line.length / CHARS_PER_TOKEN);
-	assert.ok(tokens <= CATALOG_BUDGET, `catalog is ${tokens} tokens, budget is ${CATALOG_BUDGET}`);
 });

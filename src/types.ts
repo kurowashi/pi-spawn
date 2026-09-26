@@ -15,7 +15,7 @@ export interface AgentDefinition {
 	description: string;
 	/** Markdown body, used as the child system prompt when systemPromptMode is "replace". */
 	body: string;
-	/** Declared tool allowlist. Unknown names are dropped with a warning. */
+	/** Declared tool allowlist. Names the child session cannot provide are dropped. */
 	tools?: string[];
 	model?: string;
 	thinking?: ThinkingLevel;
