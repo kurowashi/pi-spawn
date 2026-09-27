@@ -52,6 +52,8 @@ export interface RunUsage {
 export interface ChannelSnapshot {
 	/** Short label for the latest activity: "starting", "thinking", "writing", "tool: bash". */
 	activity: string;
+	/** Last non-empty line of the text the run has streamed, truncated; it stays until the run writes a new line. */
+	preview?: string;
 	usage: RunUsage;
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
@@ -63,6 +65,8 @@ export interface RunProgress {
 	run_id: string;
 	model: string;
 	activity: string;
+	/** Last streamed content line, when the run has written text. */
+	preview?: string;
 	elapsed_ms: number;
 	usage: RunUsage;
 }
@@ -75,7 +79,7 @@ export interface SpawnResult {
 	output?: string;
 	error?: string;
 	/** Partial results only: the run is still working. */
-	progress?: { activity: string; elapsed_ms: number };
+	progress?: { activity: string; elapsed_ms: number; preview?: string };
 	/** Tokens and cost billed to this run, including sibling-induced turns. */
 	usage?: RunUsage;
 	/** Present when the run continued a previous run's transcript. */

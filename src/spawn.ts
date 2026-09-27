@@ -290,6 +290,7 @@ function runProgress(entry: StartedRun, startedAt: number): RunProgress {
 		run_id: entry.handle.runId,
 		model: modelName(entry.run.model),
 		activity: snapshot.activity,
+		...(snapshot.preview === undefined ? {} : { preview: snapshot.preview }),
 		elapsed_ms: Date.now() - startedAt,
 		usage: subtractUsage(snapshot.usage, entry.handle.usageBase),
 	};
@@ -309,7 +310,6 @@ function withInducedErrors(result: SpawnResult, errors: readonly string[]): Spaw
 	return { ...result, output: output.length > 0 ? `${output}\n\n${labeled.join("\n")}` : labeled.join("\n") };
 }
 
-/** Resolve definition and model before anything starts. */
 /** Resolve definition, model, and any resumed transcript before anything starts. */
 function planRun(task: SpawnTask, defaultCwd: string, deps: SpawnDependencies): PlannedRun {
 	const definition = findDefinition(task.agent, deps.definitionRoots);
@@ -512,7 +512,7 @@ export function selectActiveTools(declared: readonly string[], customToolNames: 
 
 /** Adapt AgentSession to the narrow channel this extension depends on. */
 export function wrapSession(session: AgentSession): AgentChannel {
-	const activity = trackActivity(session);
+	const state = trackSessionState(session);
 	return {
 		prompt: async (text) => {
 			await session.prompt(text);
@@ -537,8 +537,10 @@ export function wrapSession(session: AgentSession): AgentChannel {
 		lastAssistantText: () => lastAssistantText(session.messages),
 		snapshot: () => {
 			const sessionFile = session.sessionFile;
+			const preview = state.preview();
 			return {
-				activity: activity(),
+				activity: state.activity(),
+				...(preview === undefined ? {} : { preview }),
 				usage: usageFromStats(session.getSessionStats()),
 				...(sessionFile === undefined ? {} : { sessionFile }),
 			};
@@ -546,13 +548,32 @@ export function wrapSession(session: AgentSession): AgentChannel {
 	};
 }
 
-/** Latest activity label; the subscription lives as long as the session does. */
-function trackActivity(session: AgentSession): () => string {
+/** Longest content preview the parent's one-line progress carries; the full text stays in the child transcript. */
+const PREVIEW_MAX_CHARS = 80;
+
+/**
+ * Latest activity label and streamed content preview. One subscription serves
+ * both; it lives as long as the session does.
+ */
+function trackSessionState(session: AgentSession): { activity: () => string; preview: () => string | undefined } {
 	let activity = DEFAULT_ACTIVITY;
+	let line = "";
+	let preview: string | undefined;
 	session.subscribe((event) => {
-		activity = describeSessionEvent(event as ActivityEvent) ?? activity;
+		const typed = event as ActivityEvent;
+		activity = describeSessionEvent(typed) ?? activity;
+		const update = textUpdate(typed);
+		if (update === undefined) return;
+		if (update.kind === "start") {
+			line = "";
+			return;
+		}
+		const segments = update.text.split("\n");
+		line = segments.length === 1 ? line + update.text : (segments.at(-1) ?? "");
+		const trimmed = line.trim();
+		if (trimmed.length > 0) preview = truncatePreview(trimmed);
 	});
-	return () => activity;
+	return { activity: () => activity, preview: () => preview };
 }
 
 /** The slice of a session event this extension turns into a progress label. */
@@ -562,13 +583,29 @@ export interface ActivityEvent {
 	assistantMessageEvent?: unknown;
 }
 
+/** What a session event does to the child's current text line. */
+export type TextUpdate = { kind: "start" } | { kind: "delta"; text: string };
+
+/**
+ * The text-line effect of a session event: a text block starts a new line, a
+ * delta extends it, and anything else leaves it alone.
+ */
+export function textUpdate(event: ActivityEvent): TextUpdate | undefined {
+	if (event.type !== "message_update") return undefined;
+	const message = event.assistantMessageEvent;
+	if (typeof message !== "object" || message === null || !("type" in message)) return undefined;
+	if (message.type === "text_start") return { kind: "start" };
+	if (message.type !== "text_delta") return undefined;
+	return "delta" in message && typeof message.delta === "string" ? { kind: "delta", text: message.delta } : undefined;
+}
+
 /** Human-readable activity for events worth reporting; undefined keeps the previous label. */
 export function describeSessionEvent(event: ActivityEvent): string | undefined {
 	switch (event.type) {
 		case "tool_execution_start":
 			return typeof event.toolName === "string" ? `tool: ${event.toolName}` : "tool";
 		case "message_update":
-			return isTextDelta(event.assistantMessageEvent) ? "writing" : undefined;
+			return textUpdate(event)?.kind === "delta" ? "writing" : undefined;
 		case "turn_start":
 			return "thinking";
 		default:
@@ -576,8 +613,9 @@ export function describeSessionEvent(event: ActivityEvent): string | undefined {
 	}
 }
 
-function isTextDelta(value: unknown): boolean {
-	return typeof value === "object" && value !== null && "type" in value && value.type === "text_delta";
+/** Bound a preview so one run stays one line in the parent's tool view. */
+export function truncatePreview(text: string): string {
+	return text.length <= PREVIEW_MAX_CHARS ? text : `${text.slice(0, PREVIEW_MAX_CHARS)}...`;
 }
 
 /** Reduce SDK session stats to the usage fields this extension reports. */

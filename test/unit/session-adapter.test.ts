@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import { describeSessionEvent, usageFromStats, wrapSession } from "../../src/spawn.ts";
+import { describeSessionEvent, textUpdate, truncatePreview, usageFromStats, wrapSession } from "../../src/spawn.ts";
 import type { AgentChannel } from "../../src/types.ts";
 
 interface Fake {
@@ -125,6 +125,64 @@ test("tracks the latest activity from session events", () => {
 	assert.equal(fake.channel.snapshot().activity, "writing");
 	fake.emit({ type: "message_end", message: { role: "assistant" } });
 	assert.equal(fake.channel.snapshot().activity, "writing", "uninteresting events keep the last label");
+});
+
+test("snapshot carries the streamed text as a one-line preview", () => {
+	const fake = makeFake();
+	assert.equal("preview" in fake.channel.snapshot(), false, "no preview before the first text");
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hello" } });
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: ", world" } });
+	assert.equal(fake.channel.snapshot().preview, "hello, world", "deltas continue the current line");
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "\nnext line" } });
+	assert.equal(fake.channel.snapshot().preview, "next line", "the preview is the latest line");
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "\n" } });
+	assert.equal(fake.channel.snapshot().preview, "next line", "a trailing newline keeps the last written line");
+	fake.emit({ type: "turn_start" });
+	assert.equal(fake.channel.snapshot().preview, "next line", "the preview is kept per run, not per turn");
+	for (let index = 0; index < 20; index += 1) {
+		fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x".repeat(10) } });
+	}
+	assert.equal(fake.channel.snapshot().preview, `${"x".repeat(80)}...`, "a long stream is bounded at the snapshot");
+});
+
+test("thinking and tool events do not change the preview", () => {
+	const fake = makeFake();
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "answer" } });
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "hmm" } });
+	fake.emit({ type: "tool_execution_start", toolName: "bash" });
+	assert.equal(fake.channel.snapshot().preview, "answer");
+});
+
+test("a new text block does not join the previous partial line", () => {
+	const fake = makeFake();
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "ﬁrst" } });
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_start" } });
+	assert.equal(fake.channel.snapshot().preview, "ﬁrst", "the old line stays until new text arrives");
+	fake.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "second" } });
+	assert.equal(fake.channel.snapshot().preview, "second");
+});
+
+test("maps message updates to text line changes", () => {
+	assert.deepEqual(textUpdate({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "x" } }), {
+		kind: "delta",
+		text: "x",
+	});
+	assert.deepEqual(textUpdate({ type: "message_update", assistantMessageEvent: { type: "text_start" } }), {
+		kind: "start",
+	});
+	assert.equal(
+		textUpdate({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "x" } }),
+		undefined,
+	);
+	assert.equal(textUpdate({ type: "message_update" }), undefined);
+	assert.equal(textUpdate({ type: "message_update", assistantMessageEvent: { type: "text_delta" } }), undefined);
+	assert.equal(textUpdate({ type: "turn_start" }), undefined);
+});
+
+test("bounds the preview so one run stays one line", () => {
+	assert.equal(truncatePreview("short"), "short");
+	assert.equal(truncatePreview("x".repeat(80)).length, 80, "the cap itself is kept whole");
+	assert.equal(truncatePreview("x".repeat(200)), `${"x".repeat(80)}...`);
 });
 
 test("labels only the events worth reporting", () => {

@@ -73,6 +73,14 @@ test("progress lines show each run, its activity, and the elapsed time", () => {
 	assert.equal(lines, "[writer] run-1 — tool: bash (1s)\n[reviewer] run-2 — writing (2m10s)");
 });
 
+test("a progress line carries the latest content line when there is one", () => {
+	const lines = formatProgress([
+		progress({ preview: "checking the README" }),
+		progress({ agent: "reviewer", run_id: "run-2", elapsed_ms: 2000 }),
+	]);
+	assert.equal(lines, "[writer] run-1 — tool: bash (1s) · checking the README\n[reviewer] run-2 — tool: bash (2s)");
+});
+
 test("elapsed time is compact and never negative", () => {
 	assert.equal(formatElapsed(0), "0s");
 	assert.equal(formatElapsed(-5), "0s");
@@ -93,6 +101,15 @@ test("a progress result reuses the final details shape", () => {
 			usage: USAGE,
 		},
 	]);
+});
+
+test("a progress result carries the preview in the structured details", () => {
+	const partial = progressResult([progress({ preview: "drafting the answer" })]);
+	assert.deepEqual(partial.details.results[0]?.progress, {
+		activity: "tool: bash",
+		elapsed_ms: 1000,
+		preview: "drafting the answer",
+	});
 });
 
 test("tool arguments map to the spawn request", () => {

@@ -44,6 +44,8 @@ interface FakeRun {
 	received: string[];
 	/** Latest activity label the parent would see. */
 	activity: string;
+	/** Latest content preview the parent would see. */
+	preview?: string;
 	/** Usage the parent would count after the run. */
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 	/** Persisted transcript path, when the run is file-backed. */
@@ -103,6 +105,7 @@ function createFakeRun(agent: string): FakeRun {
 		lastAssistantText: () => run.output,
 		snapshot: () => ({
 			activity: run.activity,
+			...(run.preview === undefined ? {} : { preview: run.preview }),
 			usage: run.usage,
 			...(run.sessionFile === undefined ? {} : { sessionFile: run.sessionFile }),
 		}),
@@ -505,6 +508,7 @@ test("progress frames report every live run until the call returns", async () =>
 	const frames: RunProgress[][] = [];
 	const harness = makeHarness(DEFINITIONS, async (input, run) => {
 		run.activity = `tool: ${input.agent.name}`;
+		run.preview = `draft: ${input.agent.name}`;
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	});
 
@@ -530,6 +534,10 @@ test("progress frames report every live run until the call returns", async () =>
 	assert.ok(
 		frames.some((frame) => frame.every((run) => run.activity.startsWith("tool: "))),
 		"interval frames see each run's latest activity",
+	);
+	assert.ok(
+		frames.some((frame) => frame.every((run) => run.preview?.startsWith("draft: "))),
+		"interval frames carry each run's preview",
 	);
 	assert.equal(typeof frames.at(-1)?.[0]?.elapsed_ms, "number");
 });

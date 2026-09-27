@@ -134,16 +134,23 @@ export function progressResult(progress: readonly RunProgress[]): AgentToolResul
 		agent: run.agent,
 		run_id: run.run_id,
 		model: run.model,
-		progress: { activity: run.activity, elapsed_ms: run.elapsed_ms },
+		progress: {
+			activity: run.activity,
+			elapsed_ms: run.elapsed_ms,
+			...(run.preview === undefined ? {} : { preview: run.preview }),
+		},
 		usage: run.usage,
 	}));
 	return { content: [{ type: "text", text: formatProgress(progress) }], details: { results } };
 }
 
-/** One line per live run, for the parent's tool view. */
+/** One line per live run, for the parent's tool view: activity, elapsed time, then the latest content line. */
 export function formatProgress(progress: readonly RunProgress[]): string {
 	return progress
-		.map((run) => `[${run.agent}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})`)
+		.map((run) => {
+			const line = `[${run.agent}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})`;
+			return run.preview === undefined ? line : `${line} \u00b7 ${run.preview}`;
+		})
 		.join("\n");
 }
 
