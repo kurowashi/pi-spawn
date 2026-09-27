@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ContextUsage } from "@earendil-works/pi-coding-agent";
 import { describeSessionEvent, textUpdate, truncatePreview, usageFromStats, wrapSession } from "../../src/spawn.ts";
 import type { AgentChannel } from "../../src/types.ts";
 
@@ -24,7 +24,13 @@ interface FakeStats {
 }
 
 function makeFake(
-	options: { messages?: unknown[]; shutdownError?: string; stats?: FakeStats; sessionFile?: string } = {},
+	options: {
+		messages?: unknown[];
+		shutdownError?: string;
+		stats?: FakeStats;
+		sessionFile?: string;
+		contextUsage?: ContextUsage;
+	} = {},
 ): Fake {
 	const listeners = new Set<(event: unknown) => void>();
 	const calls: string[] = [];
@@ -36,6 +42,7 @@ function makeFake(
 		messages: options.messages ?? [],
 		sessionFile: options.sessionFile,
 		getSessionStats: () => stats,
+		getContextUsage: () => options.contextUsage,
 		prompt: async (text: string) => void calls.push(`prompt:${text}`),
 		sendUserMessage: async (text: string, sendOptions?: { deliverAs?: string }) =>
 			void calls.push(`sendUserMessage:${text}:${sendOptions?.deliverAs}`),
@@ -113,6 +120,13 @@ test("snapshot omits the transcript path for an in-memory run", () => {
 	const snapshot = makeFake().channel.snapshot();
 	assert.equal(snapshot.sessionFile, undefined);
 	assert.deepEqual(snapshot.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
+});
+
+test("snapshot carries the context usage the SDK reports", () => {
+	const context = { tokens: 1000, contextWindow: 200_000, percent: 0.5 };
+	const fake = makeFake({ contextUsage: context });
+	assert.deepEqual(fake.channel.snapshot().context, context);
+	assert.equal(makeFake().channel.snapshot().context, undefined, "unknown usage stays out of the snapshot");
 });
 
 test("tracks the latest activity from session events", () => {

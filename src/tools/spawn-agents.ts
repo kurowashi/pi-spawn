@@ -11,32 +11,40 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	type AgentToolResult,
 	type AgentToolUpdateCallback,
+	type ContextUsage,
 	defineTool,
 	type ExtensionContext,
 	getAgentDir,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { definitionRoots } from "../catalog.ts";
+import { contextText, formatCost, formatElapsed, formatTokenCount, type TextTheme } from "../format.ts";
 import type { RunRegistry } from "../registry.ts";
 import {
 	createChildChannel,
+	displayNames,
 	type SpawnContext,
 	type SpawnDependencies,
 	type SpawnRequest,
 	spawnAgents,
 } from "../spawn.ts";
-import type { RunProgress, SpawnResult } from "../types.ts";
+import type { RunProgress, RunUsage, SpawnResult } from "../types.ts";
 import { childTools } from "./child-tools.ts";
 
 export const DESCRIPTION =
 	"Spawn 1..N child agents in parallel and wait for all results. Use for independent subtasks that need no parent input. " +
 	"They can message each other.";
 
+/** Output lines one result block shows before the user expands it. */
+const RESULT_PREVIEW_LINES = 10;
+
 const Task = Type.Object(
 	{
 		agent: Type.String({ description: "Agent definition name" }),
 		task: Type.String({ description: "What that agent should do" }),
+		name: Type.Optional(Type.String({ description: "Short label for this run, shown in progress and results" })),
 		model: Type.Optional(Type.String({ description: "Override model: provider/id" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for that agent" })),
 		resume_run_id: Type.Optional(Type.String({ description: "Continue a previous run id" })),
@@ -65,11 +73,19 @@ export interface SpawnToolOptions {
 }
 
 export function createSpawnAgentsTool(options: SpawnToolOptions) {
-	return defineTool({
+	return defineTool<typeof Parameters, SpawnToolDetails>({
 		name: "spawn_agents",
 		label: "Spawn agents",
 		description: DESCRIPTION,
 		parameters: Parameters,
+		renderCall(args, theme) {
+			const names = Array.isArray(args.tasks) ? displayNames(args.tasks) : [];
+			const label = names.length > 0 ? ` ${names.join(", ")}` : "";
+			return new Text(`${theme.fg("toolTitle", theme.bold("spawn_agents"))}${theme.fg("dim", label)}`, 0, 0);
+		},
+		renderResult(result, { expanded, isPartial }, theme) {
+			return new Text(renderToolText(result, expanded, isPartial, theme), 0, 0);
+		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentDir = getAgentDir();
 			const projectTrusted = ctx.isProjectTrusted();
@@ -117,7 +133,7 @@ export function spawnContext(
 export function formatResults(results: readonly SpawnResult[]): string {
 	return results
 		.map((result) => {
-			const header = `[${result.agent}] ${result.run_id} (${result.model})`;
+			const header = `[${result.name}] ${result.run_id} (${result.model})`;
 			return result.error === undefined ? `${header}\n${result.output ?? ""}` : `${header}\nERROR: ${result.error}`;
 		})
 		.join("\n\n");
@@ -131,6 +147,7 @@ export interface SpawnToolDetails {
 /** Partial tool result shown while the runs still work. Never reaches the model. */
 export function progressResult(progress: readonly RunProgress[]): AgentToolResult<SpawnToolDetails> {
 	const results: SpawnResult[] = progress.map((run) => ({
+		name: run.name,
 		agent: run.agent,
 		run_id: run.run_id,
 		model: run.model,
@@ -140,24 +157,79 @@ export function progressResult(progress: readonly RunProgress[]): AgentToolResul
 			...(run.preview === undefined ? {} : { preview: run.preview }),
 		},
 		usage: run.usage,
+		...(run.context === undefined ? {} : { context: run.context }),
 	}));
 	return { content: [{ type: "text", text: formatProgress(progress) }], details: { results } };
 }
 
-/** One line per live run, for the parent's tool view: activity, elapsed time, then the latest content line. */
+/** One line per live run, for the parent's tool view: activity, elapsed, stats, then the latest content line. */
 export function formatProgress(progress: readonly RunProgress[]): string {
 	return progress
 		.map((run) => {
-			const line = `[${run.agent}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})`;
+			const line = `[${run.name}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})${statsSuffix(run)}`;
 			return run.preview === undefined ? line : `${line} \u00b7 ${run.preview}`;
 		})
 		.join("\n");
 }
 
-/** Compact elapsed time: "12s", "2m10s". */
-export function formatElapsed(ms: number): string {
-	const seconds = Math.max(0, Math.floor(ms / 1000));
-	return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, "0")}s`;
+/** Model, context, and cost for one line. */
+function statsSuffix(run: { model: string; usage: RunUsage; context?: ContextUsage }): string {
+	const parts = [run.model];
+	if (run.context !== undefined) parts.push(contextText(run.context));
+	if (run.usage.cost > 0) parts.push(formatCost(run.usage.cost));
+	return parts.map((part) => ` \u00b7 ${part}`).join("");
+}
+
+/** The UI-only result view: one block per run with output excerpt and the stats the model does not need. */
+export function formatResultText(results: readonly SpawnResult[], expanded: boolean, theme: TextTheme): string {
+	return results.map((result) => formatResultBlock(result, expanded, theme)).join("\n\n");
+}
+
+/** Partial results reuse the one-line progress text; final results get a per-run block. */
+function renderToolText(
+	result: AgentToolResult<SpawnToolDetails>,
+	expanded: boolean,
+	isPartial: boolean,
+	theme: TextTheme,
+): string {
+	if (isPartial) {
+		const content = result.content.find((part) => part.type === "text");
+		return content === undefined ? "" : content.text;
+	}
+	return formatResultText(result.details.results, expanded, theme);
+}
+
+function formatResultBlock(result: SpawnResult, expanded: boolean, theme: TextTheme): string {
+	const elapsed = result.elapsed_ms === undefined ? "" : ` \u2014 ${formatElapsed(result.elapsed_ms)}`;
+	const header = `${theme.fg("accent", `[${result.name}] ${result.run_id}`)}${theme.fg("dim", ` (${result.model})${elapsed}`)}`;
+	const body = result.error === undefined ? excerpt(result.output ?? "", expanded) : `ERROR: ${result.error}`;
+	const meta = formatResultMeta(result, theme);
+	return [header, body, meta].filter((part) => part.length > 0).join("\n");
+}
+
+/** The first lines of a run's output; the full text stays one expansion away. */
+function excerpt(text: string, expanded: boolean): string {
+	const lines = text.split("\n");
+	if (expanded || lines.length <= RESULT_PREVIEW_LINES) return text;
+	const hidden = lines.length - RESULT_PREVIEW_LINES;
+	return `${lines.slice(0, RESULT_PREVIEW_LINES).join("\n")}\n... (${hidden} more lines)`;
+}
+
+/** Tokens, cost, context, and transcript for one run. */
+function formatResultMeta(result: SpawnResult, theme: TextTheme): string {
+	const parts: string[] = [];
+	if (result.usage !== undefined) {
+		const cache = result.usage.cacheRead + result.usage.cacheWrite;
+		parts.push(
+			`${formatTokenCount(result.usage.input)} in / ${formatTokenCount(result.usage.output)} out` +
+				(cache > 0 ? ` / ${formatTokenCount(cache)} cache` : ""),
+		);
+		if (result.usage.cost > 0) parts.push(formatCost(result.usage.cost));
+	}
+	if (result.context !== undefined) parts.push(contextText(result.context));
+	if (result.resumed_from !== undefined) parts.push(`resumed from ${result.resumed_from}`);
+	if (result.session_file !== undefined) parts.push(`session ${result.session_file}`);
+	return parts.length === 0 ? "" : theme.fg("dim", parts.join(" \u00b7 "));
 }
 
 /** The full Usage shape the SDK sums into session totals; structural to avoid a pi-ai import. */

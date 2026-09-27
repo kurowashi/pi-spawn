@@ -11,7 +11,9 @@ import type { AgentChannel, RunHandle } from "../../src/types.ts";
 function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
 	return {
 		runId,
+		name: agent,
 		agent,
+		model: "fixture/model",
 		startedAt: 0,
 		induced: new Set(),
 		inducedErrors: [],

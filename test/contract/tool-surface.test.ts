@@ -12,10 +12,13 @@ import { test } from "node:test";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
 import { childTools } from "../../src/tools/child-tools.ts";
-import { loadSpawnTools } from "../helpers/extension.ts";
+import { loadSpawnExtension, loadSpawnTools } from "../helpers/extension.ts";
 
 /** The parent-facing surface. Adding a tool is a decision that updates this list. */
 const EXPECTED_PARENT_TOOLS = ["spawn_agents"];
+
+/** The user-facing command surface. Commands cost no tool tokens, but stay intentional. */
+const EXPECTED_COMMANDS = ["spawn"];
 
 /** A tool description must earn its place in every request. */
 const MAX_DESCRIPTION_CHARS = 160;
@@ -42,6 +45,14 @@ function schemaOf(tool: ToolDefinition): SchemaShape {
 test("the parent registers exactly one delegation tool", async () => {
 	const tools = await loadSpawnTools();
 	assert.deepEqual([...tools.keys()].sort(), EXPECTED_PARENT_TOOLS);
+});
+
+test("the extension registers exactly the decided commands", async () => {
+	const extension = await loadSpawnExtension();
+	assert.deepEqual([...extension.commands.keys()].sort(), EXPECTED_COMMANDS);
+	for (const command of extension.commands.values()) {
+		assert.ok(command.description, `${command.name} needs a description for the command menu`);
+	}
 });
 
 test("children receive only the messaging tool", () => {

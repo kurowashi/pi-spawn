@@ -1,16 +1,27 @@
 /**
- * Unit: model resolution order and reply text extraction.
+ * Unit: model resolution order, run labels, reply text extraction, and usage deltas.
  */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { extractAssistantText, resolveModel, selectActiveTools, subtractUsage } from "../../src/spawn.ts";
+import {
+	displayNames,
+	extractAssistantText,
+	resolveModel,
+	runElapsed,
+	selectActiveTools,
+	subtractUsage,
+} from "../../src/spawn.ts";
+import type { RunHandle } from "../../src/types.ts";
 
 const available = [
 	{ provider: "fixture", id: "parent" },
 	{ provider: "fixture", id: "worker" },
 	{ provider: "other", id: "worker" },
 ];
+
+/** Only `startedAt` and the snapshot's settled time matter to `runElapsed`. */
+const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
 
 test("the task override wins and is reported as the source", () => {
 	const resolution = resolveModel({
@@ -145,4 +156,50 @@ test("subtracts the base usage so a resumed run reports only its own turns", () 
 		),
 		{ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 	);
+});
+
+test("a unique agent keeps its name as the run label", () => {
+	assert.deepEqual(
+		displayNames([
+			{ agent: "writer", task: "x" },
+			{ agent: "reviewer", task: "y" },
+		]),
+		["writer", "reviewer"],
+	);
+});
+
+test("a repeated agent gets numbered labels", () => {
+	assert.deepEqual(
+		displayNames([
+			{ agent: "writer", task: "x" },
+			{ agent: "writer", task: "y" },
+		]),
+		["writer-1", "writer-2"],
+	);
+});
+
+test("an explicit name wins and does not consume an automatic number", () => {
+	assert.deepEqual(
+		displayNames([
+			{ agent: "writer", task: "x", name: "intro" },
+			{ agent: "writer", task: "y" },
+			{ agent: "writer", task: "z" },
+		]),
+		["intro", "writer-1", "writer-2"],
+	);
+});
+
+test("a blank name falls back to the automatic label", () => {
+	assert.deepEqual(displayNames([{ agent: "writer", task: "x", name: "  " }]), ["writer"]);
+});
+
+test("a non-string name from streamed arguments is ignored", () => {
+	const streamed = { agent: "writer", task: "x", name: 1 as unknown as string };
+	assert.deepEqual(displayNames([streamed]), ["writer"]);
+});
+
+test("a settled run keeps the elapsed time it settled at", () => {
+	const handle = { startedAt: 1000 } as unknown as RunHandle;
+	assert.equal(runElapsed(handle, { activity: "done", settledAt: 5000, usage: ZERO_USAGE }), 4000);
+	assert.ok(runElapsed(handle, { activity: "thinking", usage: ZERO_USAGE }) > 0, "a live run measures to now");
 });

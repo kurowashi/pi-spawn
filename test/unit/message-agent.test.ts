@@ -18,7 +18,9 @@ const TEST_CONTEXT = {} as ExtensionContext;
 function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
 	return {
 		runId,
+		name: agent,
 		agent,
+		model: "fixture/model",
 		startedAt: 0,
 		induced: new Set(),
 		inducedErrors: [],
@@ -74,10 +76,10 @@ test("an ambiguous name lists the run ids to use instead", async () => {
 	);
 });
 
-test("an unknown target lists the live runs", async () => {
+test("an unknown target lists the live runs with their addresses", async () => {
 	const tool = makeTool([handle("bbb", "writer")]);
 
-	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /writer \(bbb\)/);
+	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /writer, bbb/);
 });
 
 test("an unknown target with nothing live says so", async () => {

@@ -8,6 +8,7 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ContextUsage } from "@earendil-works/pi-coding-agent";
 
 /** A parsed agent definition. Unknown frontmatter keys are reported, not kept. */
 export interface AgentDefinition {
@@ -32,6 +33,8 @@ export interface AgentDefinition {
 export interface SpawnTask {
 	agent: string;
 	task: string;
+	/** Display label for this run. Falls back to the agent name, numbered when the call repeats an agent. */
+	name?: string;
 	model?: string;
 	cwd?: string;
 	/** Run id of a persisted run to continue instead of starting fresh. */
@@ -60,12 +63,16 @@ export interface ChannelSnapshot {
 	 */
 	settledAt?: number;
 	usage: RunUsage;
+	/** Current context window usage of the child session. */
+	context?: ContextUsage;
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
 }
 
 /** One live run's state, as reported to the parent while a spawn call is in flight. */
 export interface RunProgress {
+	/** Display label: the task's `name`, or the agent name with a number when the call repeats an agent. */
+	name: string;
 	agent: string;
 	run_id: string;
 	model: string;
@@ -75,10 +82,13 @@ export interface RunProgress {
 	/** This run's elapsed time; a settled run keeps the value it settled at. */
 	elapsed_ms: number;
 	usage: RunUsage;
+	context?: ContextUsage;
 }
 
 /** The result of one run. Failures are reported per run, never as a whole-call failure. */
 export interface SpawnResult {
+	/** Display label: the task's `name`, or the agent name with a number when the call repeats an agent. */
+	name: string;
 	agent: string;
 	run_id: string;
 	model: string;
@@ -86,8 +96,12 @@ export interface SpawnResult {
 	error?: string;
 	/** Partial results only: the run is still working. */
 	progress?: { activity: string; elapsed_ms: number; preview?: string };
+	/** This run's elapsed time; a settled run keeps the value it settled at. */
+	elapsed_ms?: number;
 	/** Tokens and cost billed to this run, including sibling-induced turns. */
 	usage?: RunUsage;
+	/** Current context window usage at the end of the run. */
+	context?: ContextUsage;
 	/** Present when the run continued a previous run's transcript. */
 	resumed_from?: string;
 	/** Persisted child transcript, when the run was file-backed. */
@@ -125,7 +139,11 @@ export interface AgentChannel {
 /** A live child session plus its addressing keys. */
 export interface RunHandle {
 	runId: string;
+	/** Display label shown in progress, results, and the /spawn command. */
+	name: string;
 	agent: string;
+	/** `provider/id` of the model this run uses. */
+	model: string;
 	/** When this run's channel was created; progress reports elapsed from here. */
 	startedAt: number;
 	channel: AgentChannel;

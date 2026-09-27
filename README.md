@@ -3,7 +3,7 @@
 Pi から子エージェントを並列に起動し、
 **兄弟エージェント同士が直接メッセージをやり取り**できる拡張です。インストール後、
 プロジェクトまたはホームディレクトリの `agents/*.md` に子を定義し、
-親セッションから `spawn_agents` で起動します。
+親セッションから `spawn_agents` で起動します。実行中は `/spawn` で子の進捗・統計・ログを確認できます。
 
 ## 実行モデル
 
@@ -136,11 +136,15 @@ spawn_agents({
 | `tasks` | ○ | — | 同時に走らせるタスク(1件以上) |
 | `tasks[].agent` | ○ | — | 子エージェント定義の `name` |
 | `tasks[].task` | ○ | — | 委譲するタスク文 |
+| `tasks[].name` | | agent 名(重複時は連番) | 表示用の短い名前 |
 | `tasks[].model` | | 定義の `model` | 使用モデルの上書き(`provider/id`) |
 | `tasks[].cwd` | | 親と同じ | 子の作業ディレクトリ |
 | `tasks[].resume_run_id` | | — | 再開する run の id |
 | `context` | | `fresh` | `fresh`(空) / `fork`(親の会話をコピー) |
 | `timeout_seconds` | | 制限なし | 呼び出し全体の制限時間(秒) |
+
+`tasks[].name` は表示用の名前です。同じ agent を複数の役割で使うときの区別に使います。
+未指定時は agent 名、同じ agent を複数起動したときは `writer-1` のように連番になります。
 
 単独で委譲する:
 
@@ -153,23 +157,68 @@ spawn_agents({ tasks: [{ agent: "reviewer", task: "README の下書きをレビ�
 ```text
 spawn_agents({
   tasks: [
-    { agent: "writer", task: "構成案を書いて" },
-    { agent: "reviewer", task: "構成案をレビューして" }
+    { agent: "writer", task: "構成案を書いて", name: "outline" },
+    { agent: "reviewer", task: "構成案をレビューして", name: "review" }
   ]
 })
 ```
 
-実行開始時に各子の状態を表示し、その後は1秒ごとに更新します。子1体につき1行で、次の順に表示します。
+実行開始時に各子の状態を表示し、その後は1秒ごとに更新します。
+実行中に既定で見えるのは最新出力の1行だけです。詳しくは[実行中の子を見る](#実行中の子を見る)を参照してください。
 
-- 名前と run id
+## 実行中の子を見る
+
+`spawn_agents` は親のターンを占有しますが、その間も拡張コマンドは即座に実行されます。
+
+### 進捗表示
+
+子1体につき1行で、次の順に表示します。
+
+- 表示名(`tasks[].name`。規則は引数表を参照)と run id
 - 最新活動(`thinking` / `writing` / `tool: bash` など。ターンが終わった子は `done`)
 - 起動からの経過時間(`done` の子は完了時点で停止)
+- 使用モデル、コンテキスト使用量(`ctx 12.3k/200k (6%)`)、コスト(0ドルのときは省略)
 - 最新出力の1行(子がテキストを出力した後だけ表示。最後の非空行で、80文字を超える分は `...` で省略)
 
 `done` はターンが終わった状態を意味し、兄弟からのメッセージで新しいターンが始まると `thinking` などに戻ります。
 
-実行中に表示するのは最新出力の1行だけです。全文は子セッションに残り、
-完了後に結果の `session_file` を `pi --session <path>` に渡して開きます。
+結果の表示(UI)は run ごとのブロックで、見出し・出力の抜粋・統計行(usage、コンテキスト、経過時間、`session_file`)を出します。
+全文は `/spawn logs <target>` でライブ表示でき、完了後は結果の `session_file` を `pi --session <path>` に渡しても開けます。
+
+### コマンド
+
+| コマンド | 動作 |
+|---|---|
+| `/spawn` | 実行中 run の一覧から1件選び、ログを開きます |
+| `/spawn <target>` / `/spawn logs <target>` | target の run のログを開きます |
+
+target は run id か、一意な agent 名です。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
+
+### ログビュー
+
+ログビューは子セッションの JSONL 末尾を0.7秒ごとに読み、次のタグを付けた行として表示します。
+
+| タグ | 内容 |
+|---|---|
+| `[user]` / `[assistant]` | 発話 |
+| `[tool:<name>]` / `[result:<name>]` / `[error:<name>]` | ツール呼び出し・結果・エラー |
+| `[compacted]` / `[custom]` | コンパクション・その他のエントリ |
+
+- 継続行は2スペース字下げし、1行は400文字を超える分を `...` で省略します
+
+| キー | 動作 |
+|---|---|
+| `Esc` / `q` | 閉じる |
+| `↑` / `k`、`↓` / `j` | 1行スクロール |
+| `PgUp` / `PgDn` | ページスクロール |
+| `f` / `End` | 最新に追従 |
+| `t` / `Home` | 最古へ移動 |
+
+### 完了後の扱い
+
+- 一覧に出るのは実行中の run だけです。完了後は結果の `session_file` を `pi --session <path>` に渡して開きます
+- run が完了するとステータス行が `finished` に変わり、以降の追記はありません(ビューは閉じるまで読み続けます)
+- ログビューは TUI 専用です。RPC では要約の通知だけになり、print / JSON では何も表示しません
 
 ## 子同士のメッセージ
 
@@ -204,7 +253,7 @@ message_agent({ to, text })
 
 ### 宛先の指定
 
-- run id: 呼び出しごとに決まる子の識別子です。結果の見出し `[agent] run_id (model)` に載ります
+- run id: 呼び出しごとに決まる子の識別子です。結果の見出し `[name] run_id (model)` に載ります
 - agent 名: 同じ agent が複数走っていると曖昧になるため、run id を使ってください
 - 兄弟がいる子のタスク先頭には宛先一覧が自動で付きます
 
@@ -218,6 +267,7 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 
 | フィールド | 意味 |
 |---|---|
+| `name` | 表示名(`tasks[].name` と同じ規則) |
 | `agent` | 定義名 |
 | `run_id` | run の識別子。`resume_run_id` に渡すと再開できます |
 | `model` | 実際に使われたモデル |
@@ -225,6 +275,8 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | `output` | 最後の発話。メッセージで始まったターンの発話も含みます |
 | `error` | 失敗した run だけに入ります。このとき `output` はありません |
 | `usage` | 子のトークンとコスト。親セッションの統計にも加算されます |
+| `context` | 終了時点のコンテキスト使用量 |
+| `elapsed_ms` | 実行時間(ミリ秒) |
 | `session_file` | 子セッションの保存先。全文は `pi --session <path>` で開けます |
 
 - 再開した run の `usage` は、再開後に加算された分だけです
@@ -232,6 +284,8 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 - 未知の agent や解決できない `model` は、何も起動せずにエラーになります
 - `timeout_seconds` は呼び出し全体の制限時間(秒)です。無指定なら制限はありません。
   過ぎたら全子を中断します
+- 結果の見出し `[name] run_id (model)` と `output` はモデルにも渡ります。失敗した run は `ERROR: <error>` が渡ります
+- `usage`・`context`・`elapsed_ms`・`session_file` はツール結果の `details` にだけ入り、モデルには渡りません
 
 ## 高度な使い方
 
@@ -266,14 +320,16 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | 子から親セッションへの質問 | タスク文に判断基準を書く。曖昧さは spawn 前に解消する |
 | 子が同一ターン内で返信を待つ | 返信は次のターンで届く。会話はターンで進める |
 | 親から実行中の子への指示 | タイムアウトで止めて出し直す |
-| 実行中の子の全文をその場で見る | 実行中は最新出力の1行のみ。完了後に `session_file` を `pi --session <path>` に渡して開く |
+| 実行中の子の全文の確認 | `/spawn logs <target>` でライブ表示する(TUI のみ) |
+| 完了した子のログの確認 | `session_file` を `pi --session <path>` に渡して開く |
 | 並列での書き込み隔離 | 読み取り中心のタスクに限定する |
 | 子の出力の自動検証 | 親がテストや差分確認を実行する |
 | コスト上限の強制 | 上限はない。結果の `usage` とセッション統計で確認する |
 
 ## 開発者向け情報
 
-この節は pi-spawn 自体を開発する人向けです。実行時依存はなく、依存はすべて devDependency です。
+この節は pi-spawn 自体を開発する人向けです。実行時依存(`dependencies`)はなく、依存は devDependency と、
+Pi が供給する peer 依存(`@earendil-works/pi-tui`)だけです。
 コマンドはリポジトリのルートで実行します。
 
 ```bash

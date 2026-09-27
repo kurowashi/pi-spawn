@@ -10,10 +10,12 @@ import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent"
 import { definitionRoots, discoverAgents, formatCatalog } from "./catalog.ts";
 import { createRunRegistry } from "./registry.ts";
 import { createSpawnAgentsTool } from "./tools/spawn-agents.ts";
+import { registerSpawnCommand } from "./tools/spawn-command.ts";
 
 export default function registerSpawnExtension(pi: ExtensionAPI): void {
 	const registry = createRunRegistry();
 	pi.registerTool(createSpawnAgentsTool({ registry }));
+	registerSpawnCommand(pi, registry);
 
 	// The catalog is the only discovery surface: no list tool, no skill file.
 	pi.on("before_agent_start", (event, ctx) => {

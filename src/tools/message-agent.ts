@@ -10,7 +10,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { deliverMessage } from "../deliver.ts";
-import type { RunRegistry } from "../registry.ts";
+import { explainTarget, type RunRegistry } from "../registry.ts";
 
 export const DESCRIPTION = "Message a sibling agent run. The reply arrives as a new turn.";
 
@@ -34,7 +34,7 @@ export function createMessageAgentTool(options: MessageToolOptions) {
 		parameters: Parameters,
 		async execute(_toolCallId, params) {
 			const resolution = options.registry.resolve(params.to);
-			if (!resolution.ok) throw new Error(explain(resolution, options.registry));
+			if (!resolution.ok) throw new Error(explainTarget(params.to, resolution, options.registry.list()));
 
 			const outcome = await deliverMessage({ target: resolution.handle, text: params.text });
 			if (!outcome.delivered) throw new Error(outcome.error);
@@ -45,18 +45,4 @@ export function createMessageAgentTool(options: MessageToolOptions) {
 			};
 		},
 	});
-}
-
-function explain(
-	resolution: { reason: "not_found" } | { reason: "ambiguous"; candidates: string[] },
-	registry: RunRegistry,
-): string {
-	if (resolution.reason === "ambiguous") {
-		return `'${resolution.candidates.join("', '")}' are all live: address one of those run ids instead of the agent name`;
-	}
-	const live = registry
-		.list()
-		.map((handle) => `${handle.agent} (${handle.runId})`)
-		.join(", ");
-	return `no live run matches that target. Live runs: ${live.length > 0 ? live : "(none)"}`;
 }

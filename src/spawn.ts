@@ -19,6 +19,7 @@ import type { RunRegistry } from "./registry.ts";
 import type {
 	AgentChannel,
 	AgentDefinition,
+	ChannelSnapshot,
 	RunHandle,
 	RunProgress,
 	RunUsage,
@@ -153,6 +154,8 @@ export interface SpawnContext {
 interface PlannedRun {
 	task: SpawnTask;
 	definition: AgentDefinition;
+	/** Display label for this run. */
+	name: string;
 	model: ModelIdentity;
 	runId: string;
 	cwd: string;
@@ -179,7 +182,8 @@ export async function spawnAgents(
 	spawnContext: SpawnContext,
 	deps: SpawnDependencies,
 ): Promise<SpawnResult[]> {
-	const planned = request.tasks.map((task) => planRun(task, spawnContext.cwd, deps));
+	const names = displayNames(request.tasks);
+	const planned = request.tasks.map((task, index) => planRun(task, names[index] ?? task.agent, spawnContext.cwd, deps));
 
 	const started = await startRuns(planned, request, spawnContext, deps);
 
@@ -240,7 +244,9 @@ async function startRuns(
 			});
 			const handle: RunHandle = {
 				runId: run.runId,
+				name: run.name,
 				agent: run.definition.name,
+				model: modelName(run.model),
 				startedAt: Date.now(),
 				channel,
 				induced: new Set(),
@@ -287,14 +293,16 @@ function startProgress(briefed: readonly StartedRun[], spawnContext: SpawnContex
 function runProgress(entry: StartedRun): RunProgress {
 	const snapshot = entry.handle.channel.snapshot();
 	return {
+		name: entry.handle.name,
 		agent: entry.handle.agent,
 		run_id: entry.handle.runId,
-		model: modelName(entry.run.model),
+		model: entry.handle.model,
 		activity: snapshot.activity,
 		...(snapshot.preview === undefined ? {} : { preview: snapshot.preview }),
 		// A settled run's clock stops, so its line keeps the time the run actually took.
-		elapsed_ms: (snapshot.settledAt ?? Date.now()) - entry.handle.startedAt,
+		elapsed_ms: runElapsed(entry.handle, snapshot),
 		usage: subtractUsage(snapshot.usage, entry.handle.usageBase),
+		...(snapshot.context === undefined ? {} : { context: snapshot.context }),
 	};
 }
 
@@ -312,8 +320,27 @@ function withInducedErrors(result: SpawnResult, errors: readonly string[]): Spaw
 	return { ...result, output: output.length > 0 ? `${output}\n\n${labeled.join("\n")}` : labeled.join("\n") };
 }
 
+/**
+ * Display labels for one spawn call: the task's `name`, or the agent name when
+ * the call runs that agent once, `agent-1`, `agent-2`, ... when it repeats.
+ * Labels are for reading; run ids stay the only addressing key.
+ */
+export function displayNames(tasks: readonly SpawnTask[]): string[] {
+	const counts = new Map<string, number>();
+	for (const task of tasks) counts.set(task.agent, (counts.get(task.agent) ?? 0) + 1);
+	const seen = new Map<string, number>();
+	return tasks.map((task) => {
+		// The renderer runs on streamed arguments, which may not match the schema yet.
+		const explicit = typeof task.name === "string" ? task.name.trim() : "";
+		if (explicit.length > 0) return explicit;
+		const index = (seen.get(task.agent) ?? 0) + 1;
+		seen.set(task.agent, index);
+		return (counts.get(task.agent) ?? 0) > 1 ? `${task.agent}-${index}` : task.agent;
+	});
+}
+
 /** Resolve definition, model, and any resumed transcript before anything starts. */
-function planRun(task: SpawnTask, defaultCwd: string, deps: SpawnDependencies): PlannedRun {
+function planRun(task: SpawnTask, name: string, defaultCwd: string, deps: SpawnDependencies): PlannedRun {
 	const definition = findDefinition(task.agent, deps.definitionRoots);
 	const resolution = resolveModel({
 		taskReference: task.model,
@@ -327,6 +354,7 @@ function planRun(task: SpawnTask, defaultCwd: string, deps: SpawnDependencies): 
 	return {
 		task,
 		definition,
+		name,
 		model: resolution.model,
 		runId: deps.nextRunId(),
 		cwd,
@@ -380,6 +408,7 @@ function latestOutput(entry: SettledRun): Pick<SpawnResult, "output"> {
 async function runOne(started: StartedRun): Promise<SpawnResult> {
 	const { run, handle, briefing } = started;
 	const identity = {
+		name: run.name,
 		agent: run.definition.name,
 		run_id: run.runId,
 		model: modelName(run.model),
@@ -394,13 +423,20 @@ async function runOne(started: StartedRun): Promise<SpawnResult> {
 	}
 }
 
-/** Usage and transcript path as of now; read once the run has stopped for good. */
-function snapshotFields(handle: RunHandle): Pick<SpawnResult, "usage" | "session_file"> {
+/** Usage, elapsed time, context, and transcript path as of now; read once the run has stopped for good. */
+function snapshotFields(handle: RunHandle): Pick<SpawnResult, "usage" | "context" | "elapsed_ms" | "session_file"> {
 	const snapshot = handle.channel.snapshot();
 	return {
 		usage: subtractUsage(snapshot.usage, handle.usageBase),
+		elapsed_ms: runElapsed(handle, snapshot),
+		...(snapshot.context === undefined ? {} : { context: snapshot.context }),
 		...(snapshot.sessionFile === undefined ? {} : { session_file: snapshot.sessionFile }),
 	};
+}
+
+/** A run's elapsed time; a settled run keeps the time it settled at. */
+export function runElapsed(handle: RunHandle, snapshot: ChannelSnapshot): number {
+	return (snapshot.settledAt ?? Date.now()) - handle.startedAt;
 }
 
 /** The usage billed after the base snapshot; a resumed run already carried earlier turns. */
@@ -419,7 +455,8 @@ export function subtractUsage(current: RunUsage, base: RunUsage): RunUsage {
  *
  * Run ids only exist after the call has been planned, so this is the only way a
  * child can learn them; without it `to: <run id>` would be unusable and two runs
- * of the same agent could not be told apart.
+ * of the same agent could not be told apart. Addresses are agent names and run
+ * ids; display labels stay parent-facing.
  */
 export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]): string {
 	const siblings = handles.filter((handle) => handle.runId !== self.runId);
@@ -541,11 +578,13 @@ export function wrapSession(session: AgentSession): AgentChannel {
 			const sessionFile = session.sessionFile;
 			const preview = state.preview();
 			const settledAt = state.settledAt();
+			const context = session.getContextUsage();
 			return {
 				activity: state.activity(),
 				...(preview === undefined ? {} : { preview }),
 				...(settledAt === undefined ? {} : { settledAt }),
 				usage: usageFromStats(session.getSessionStats()),
+				...(context === undefined ? {} : { context }),
 				...(sessionFile === undefined ? {} : { sessionFile }),
 			};
 		},

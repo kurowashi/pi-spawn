@@ -27,6 +27,16 @@ export function resolveTarget(to: string, handles: readonly RunHandle[]): Target
 	return { ok: true, handle: first };
 }
 
+/** The failure explanation for a rejected resolve, naming every live run so the caller can retry. */
+export function explainTarget(to: string, resolution: TargetResolution, handles: readonly RunHandle[]): string {
+	if (resolution.ok) return "";
+	if (resolution.reason === "ambiguous") {
+		return `'${resolution.candidates.join("', '")}' are all live: address one of those run ids instead of the agent name`;
+	}
+	const live = handles.map((handle) => `${handle.name} (${handle.agent}, ${handle.runId})`).join(", ");
+	return `no live run matches '${to}'. Address by run id or a unique agent name. Live runs: ${live.length > 0 ? live : "(none)"}`;
+}
+
 export interface RunRegistry {
 	add(handle: RunHandle): void;
 	remove(runId: string): void;

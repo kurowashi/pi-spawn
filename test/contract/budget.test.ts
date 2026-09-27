@@ -28,6 +28,8 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * After the description review: 343 tokens (spawn_agents 248, message_agent 95).
  *
  * After removing wait_for_reply: 319 tokens (spawn_agents 248, message_agent 71).
+ *
+ * After run names and display stats: 344 tokens (spawn_agents 273, message_agent 71).
  */
 const TOKEN_BUDGET = 400;
 

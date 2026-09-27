@@ -21,12 +21,13 @@
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | ツール面は `spawn_agents`(親)/ `message_agent`(子)の2つだけ | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `EXPECTED_PARENT_TOOLS`、`src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
+| 登録コマンドは `spawn` だけ | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `EXPECTED_COMMANDS`、`src/index.ts` |
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | `test/contract/budget.test.ts` の `TOKEN_BUDGET`(計測値はコメント) |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_DESCRIPTION_CHARS` |
 | トップレベル引数は 3 個以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_TOP_LEVEL_PARAMETERS` |
 | スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `src/tools/*.ts` |
 
-### カタログ・resume・usage
+### カタログ・resume・usage・表示名
 
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
@@ -35,12 +36,13 @@
 | resume は永続化済みの run だけを対象にする(run id = セッション id) | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
 | resume の探索は `cwd` 一致で行う | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
+| run の表示名は `tasks[].name`、無ければ agent 名、複数 run では連番 | `test/unit/spawn.test.ts` | `src/spawn.ts` の `displayNames` |
 
 ### 依存関係・import
 
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
-| 実行時依存を持たない(`dependencies` は空) | `test/contract/dependencies.test.ts` | `package.json` |
+| 実行時依存を持たない(`dependencies` を持たない) | `test/contract/dependencies.test.ts` | `package.json` |
 | `src` の import は node builtin / 相対 `.ts` / Pi 提供パッケージの3種のみ | `test/contract/dependencies.test.ts` | `test/contract/dependencies.test.ts` の `ALLOWED_PEER_DEPENDENCIES` |
 | devDependency は allowlist 内のみ | `test/contract/dependencies.test.ts` | `test/contract/dependencies.test.ts` の `ALLOWED_DEV_DEPENDENCIES` |
 
@@ -66,7 +68,8 @@
 - ツールを増やす・引数を増やす場合は、`TOKEN_BUDGET` を更新する。
   予算は「上げるもの」ではなく「交渉するもの」として扱い、再導出は PHILOSOPHY.md の判断手順に立ち返る。
   上げる場合は計測値をテストのコメントに更新し、コミットメッセージに理由を残す。
-- 依存を追加する場合は devDependency のみ可能。allowlist の更新とコミットメッセージの理由をセットで行う。
+- 依存を追加できるのは devDependency と、Pi が供給する peer 依存(`ALLOWED_PEER_DEPENDENCIES`)のみ。
+  devDependency は `ALLOWED_DEV_DEPENDENCIES` を更新し、コミットメッセージに理由を残す。
   実行時依存(`dependencies`)の追加は不可。
 - 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、
   却下した代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に触れる決定のときだけ。
@@ -88,14 +91,15 @@
 3. 既定の子(`extensions` 無し)からは `spawn_agents` を呼べないこと。
 4. spawn した子のセッションが `~/.pi/agent/spawn-sessions/` に残り、結果の `session_file` と一致し、
    `pi --session <path>` で開けること。`context: "fork"` の子は親の履歴から始まること。
-5. 子の実行中に `spawn_agents` の表示が1秒ごとに更新されること。各子の1行に最新活動と起動からの経過時間が出て、
-   子がテキストを出力した後は最新出力の1行も出ること(80文字を超える分は `...` で省略)。
-   先にターンが終わった子は `done` になり、その経過時間が止まったまま兄弟の実行が続くこと。
-   完了後、親セッションのコスト統計に子の使用量が加算されていること(`/session` で確認)。
+5. 子の実行中に `spawn_agents` の各子の1行と、完了後の結果の表示に表示名・モデル・コンテキスト使用量・コスト・
+   run 別 usage・`session_file` が出ること(進捗の追従と `done` の挙動は ADR 0004 と README の通り)。
+   完了後、親セッションのコスト統計に子の使用量が加算されていること(`/session` のコスト統計で確認)。
 6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が返ること。
    `session_file` が前回と同じで、usage が再開後の分だけであること。
 7. `<project>/.pi/agents/` の定義が、信頼していないプロジェクトではカタログに現れず spawn も失敗し、
    trust 済み(`--approve` など)では現れて spawn できること。
+8. 子の実行中に `/spawn` でログを開き、追記への追従・スクロール・`Esc` での終了を確認する。
+   実行が終わった後もビューが壊れず、`finished` 表示に変わること(キーの網羅は README を参照)。
 
 ## 手動レビュー(自動検証の対象外): ツール面の必要十分性
 
