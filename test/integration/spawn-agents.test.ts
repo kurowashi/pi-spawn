@@ -547,32 +547,21 @@ test("progress frames report every live run until the call returns", async () =>
 
 test("a settled run reports done with a stopped clock while a sibling still works", async () => {
 	const frames: RunProgress[][] = [];
-	let releaseWriter: () => void = () => {};
-	const writerReleased = new Promise<void>((resolve) => {
-		releaseWriter = resolve;
-	});
 	const harness = makeHarness(DEFINITIONS, async (input, run) => {
 		if (input.agent.name !== "reviewer") {
-			await writerReleased;
+			await new Promise((resolve) => setTimeout(resolve, 50));
 			return;
 		}
 		run.activity = "done";
 		run.settledAt = Date.now();
 	});
 
-	let overlappingFrames = 0;
 	await spawnAgents(
 		BOTH_TASKS,
 		{
 			cwd: harness.cwd,
 			progressIntervalMs: 5,
-			onProgress: (progress) => {
-				frames.push([...progress]);
-				if (progress[0]?.activity !== "done" || progress[1]?.activity === "done") return;
-				overlappingFrames += 1;
-				// Keep the sibling working until two frames have observed the settled one.
-				if (overlappingFrames === 2) releaseWriter();
-			},
+			onProgress: (progress) => frames.push([...progress]),
 		},
 		harness.deps,
 	);
