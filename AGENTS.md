@@ -4,15 +4,15 @@
 設計の判断基準は DESIGN.md と PHILOSOPHY.md(このプラグイン群共通)に書きます。
 
 ここには、壊してはいけない制約と、制約に触れる変更の手順だけを書きます。制約の正はテストで、
-下の表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは
-制約として書かず、自動テストできない範囲は末尾に分けます。
+下の表はその索引です。実装と表が食い違った場合はテストが正です。検証手段を併記できないものは制約として書かず、
+自動テストできない範囲は末尾に分けます。
 
 ## 完了条件
 
 `npm run verify`(= `npm run check` + `npm test` + `npm run test:coverage`)が通ること。
 フックが通っても CI が通らなければ未完了。CI は同じ `verify` を Node 22.19 / 24 で実行します。
-カバレッジは `test/unit` と `test/integration` で計測します。下の表の「検証」列は個別の検証箇所で
-あり、自動検証はすべて `verify` に含まれます。
+カバレッジは `test/unit` と `test/integration` で計測します。下の表の「検証」列は個別の検証箇所であり、
+自動検証はすべて `verify` に含まれます。
 
 ## 制約
 
@@ -63,23 +63,23 @@
 
 ## 変更時の手順
 
-- ツールを増やす・引数を増やす場合は、`TOKEN_BUDGET` を更新する。予算は「上げるもの」ではなく
-  「交渉するもの」として扱い、再導出は PHILOSOPHY.md の判断手順に立ち返る。上げる場合は計測値を
-  テストのコメントに更新し、コミットメッセージに理由を残す。
-- 依存を追加する場合は devDependency のみ可能。allowlist の更新とコミットメッセージの理由を
-  セットで行う。実行時依存(`dependencies`)の追加は不可。
-- 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、却下した
-  代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に
-  触れる決定のときだけ。却下案は結果ではなく理由を書く。
-- ツール・コマンド・設定・公開の振る舞いを変える前に `docs/adr/` を読み、却下済みの代替を
-  再提案しない。決定が変わったら同じコミットで状態を更新する(採用 → 廃止)。
-- カバレッジの数値は契約テストの影響を受けます。契約テストは jiti 経由で `src` をもう一度
-  ロードするため、同じファイルが2実体として数えられます。
+- ツールを増やす・引数を増やす場合は、`TOKEN_BUDGET` を更新する。
+  予算は「上げるもの」ではなく「交渉するもの」として扱い、再導出は PHILOSOPHY.md の判断手順に立ち返る。
+  上げる場合は計測値をテストのコメントに更新し、コミットメッセージに理由を残す。
+- 依存を追加する場合は devDependency のみ可能。allowlist の更新とコミットメッセージの理由をセットで行う。
+  実行時依存(`dependencies`)の追加は不可。
+- 決定の記録は `docs/adr/` に置く(1決定 = 1ファイル、`NNNN-<topic>.md`)。追加するのは、
+  却下した代替を再提案されうる決定、機能や振る舞いを削除・置き換える決定、DESIGN.md / PHILOSOPHY.md に触れる決定のときだけ。
+  却下案は結果ではなく理由を書く。
+- ツール・コマンド・設定・公開の振る舞いを変える前に `docs/adr/` を読み、却下済みの代替を再提案しない。
+  決定が変わったら同じコミットで状態を更新する(採用 → 廃止)。
+- カバレッジの数値は契約テストの影響を受けます。契約テストは jiti 経由で `src` をもう一度ロードするため、
+  同じファイルが2実体として数えられます。
 
 ## 手動確認項目(自動検証の対象外)
 
-`src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外
-です。ここは実モデルで確認します。
+`src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外です。
+ここは実モデルで確認します。
 
 1. 2エージェントを並列 spawn し、片方からの `message_agent` が相手の新しいターンを起こし、会話後の最新の発話が結果に現れること。
 2. `extensions: true` の agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
@@ -90,22 +90,21 @@
 5. 子の実行中に `spawn_agents` の表示が1秒ごとに更新されること。各子の1行に最新活動と経過時間が出て、
    子がテキストを出力した後は最新出力の1行も出ること(80文字を超える分は `...` で省略)。完了後、
    親セッションのコスト統計に子の使用量が加算されていること(`/session` で確認)。
-6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が
-   返ること。`session_file` が前回と同じで、usage が再開後の分だけであること。
-7. `<project>/.pi/agents/` の定義が、信頼していないプロジェクトではカタログに現れず spawn も
-   失敗し、trust 済み(`--approve` など)では現れて spawn できること。
+6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が返ること。
+   `session_file` が前回と同じで、usage が再開後の分だけであること。
+7. `<project>/.pi/agents/` の定義が、信頼していないプロジェクトではカタログに現れず spawn も失敗し、
+   trust 済み(`--approve` など)では現れて spawn できること。
 
 ## 手動レビュー(自動検証の対象外): ツール面の必要十分性
 
 トークン予算は契約テストが守るが、「そのコストが機能と実使用に見合うか」は自動化できない。
 ツール面(説明・スキーマ・引数・カタログ)を変えた時と、定期的に確認する:
 
-1. 計測: `spawn_agents` / `message_agent` の `name + description + JSON.stringify(parameters)`
-   とカタログ行を、`test/contract/budget.test.ts` の `tokensOf` と同じ式(4文字=1トークン)で
-   ツール別・引数別に集計する。
-2. 実使用: `~/.pi/agent/sessions/**/*.jsonl` と `~/.pi/agent/spawn-sessions/*.jsonl` を JSONL と
-   して読み、`role: "assistant"` の `content[].type == "toolCall"` を集計する。ツール別の
-   呼び出し回数、`tasks[]` の各フィールドと `context` / `timeout_seconds` の使用率、
+1. 計測: `spawn_agents` / `message_agent` の `name + description + JSON.stringify(parameters)` とカタログ行を、
+   `test/contract/budget.test.ts` の `tokensOf` と同じ式(4文字=1トークン)でツール別・引数別に集計する。
+2. 実使用: `~/.pi/agent/sessions/**/*.jsonl` と `~/.pi/agent/spawn-sessions/*.jsonl` を JSONL として読み、
+   `role: "assistant"` の `content[].type == "toolCall"` を集計する。
+   ツール別の呼び出し回数、`tasks[]` の各フィールドと `context` / `timeout_seconds` の使用率、
    `role: "toolResult"` のエラー(`details.error` か `Validation failed for tool`)を出す。
    - 開発セッションの意図的な不正 agent テストは誤用と数えず、通常利用と分ける。
    - 文字列 grep で `"name":"spawn_agents"` を数えると、システムプロンプトの `toolsAdded` を
