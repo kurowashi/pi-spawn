@@ -46,6 +46,8 @@ interface FakeRun {
 	activity: string;
 	/** Latest content preview the parent would see. */
 	preview?: string;
+	/** Session settle time, set by a script to simulate a finished turn. */
+	settledAt?: number;
 	/** Usage the parent would count after the run. */
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 	/** Persisted transcript path, when the run is file-backed. */
@@ -106,6 +108,7 @@ function createFakeRun(agent: string): FakeRun {
 		snapshot: () => ({
 			activity: run.activity,
 			...(run.preview === undefined ? {} : { preview: run.preview }),
+			...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),
 			usage: run.usage,
 			...(run.sessionFile === undefined ? {} : { sessionFile: run.sessionFile }),
 		}),
@@ -540,4 +543,43 @@ test("progress frames report every live run until the call returns", async () =>
 		"interval frames carry each run's preview",
 	);
 	assert.equal(typeof frames.at(-1)?.[0]?.elapsed_ms, "number");
+});
+
+test("a settled run reports done with a stopped clock while a sibling still works", async () => {
+	const frames: RunProgress[][] = [];
+	let releaseWriter: () => void = () => {};
+	const writerReleased = new Promise<void>((resolve) => {
+		releaseWriter = resolve;
+	});
+	const harness = makeHarness(DEFINITIONS, async (input, run) => {
+		if (input.agent.name !== "reviewer") {
+			await writerReleased;
+			return;
+		}
+		run.activity = "done";
+		run.settledAt = Date.now();
+	});
+
+	let overlappingFrames = 0;
+	await spawnAgents(
+		BOTH_TASKS,
+		{
+			cwd: harness.cwd,
+			progressIntervalMs: 5,
+			onProgress: (progress) => {
+				frames.push([...progress]);
+				if (progress[0]?.activity !== "done" || progress[1]?.activity === "done") return;
+				overlappingFrames += 1;
+				// Keep the sibling working until two frames have observed the settled one.
+				if (overlappingFrames === 2) releaseWriter();
+			},
+		},
+		harness.deps,
+	);
+
+	const overlapping = frames.filter((frame) => frame[0]?.activity === "done" && frame[1]?.activity !== "done");
+	assert.ok(overlapping.length >= 2, "frames keep arriving while the sibling works");
+	const elapsed = overlapping.map((frame) => frame[0]?.elapsed_ms);
+	assert.equal(typeof elapsed[0], "number");
+	assert.equal(new Set(elapsed).size, 1, "the settled run's clock does not advance");
 });

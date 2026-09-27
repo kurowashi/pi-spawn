@@ -50,10 +50,15 @@ export interface RunUsage {
 
 /** Everything a live run can report without being stopped. */
 export interface ChannelSnapshot {
-	/** Short label for the latest activity: "starting", "thinking", "writing", "tool: bash". */
+	/** Short label for the latest activity: "starting", "thinking", "writing", "tool: bash", "done". */
 	activity: string;
 	/** Last non-empty line of the text the run has streamed, truncated; it stays until the run writes a new line. */
 	preview?: string;
+	/**
+	 * When the session last settled (`agent_settled`); undefined while a run is in flight.
+	 * A settled run can still be woken by a sibling message, which clears this again.
+	 */
+	settledAt?: number;
 	usage: RunUsage;
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
@@ -67,6 +72,7 @@ export interface RunProgress {
 	activity: string;
 	/** Last streamed content line, when the run has written text. */
 	preview?: string;
+	/** This run's elapsed time; a settled run keeps the value it settled at. */
 	elapsed_ms: number;
 	usage: RunUsage;
 }
@@ -120,6 +126,8 @@ export interface AgentChannel {
 export interface RunHandle {
 	runId: string;
 	agent: string;
+	/** When this run's channel was created; progress reports elapsed from here. */
+	startedAt: number;
 	channel: AgentChannel;
 	/** Turns a sibling message started; the spawn call owns their completion. */
 	induced: Set<Promise<void>>;

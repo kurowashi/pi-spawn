@@ -199,7 +199,7 @@ export async function spawnAgents(
 				started.map((candidate) => candidate.handle),
 			),
 		}));
-		stopProgress = startProgress(briefed, Date.now(), spawnContext);
+		stopProgress = startProgress(briefed, spawnContext);
 		const settled = await Promise.all(briefed.map(runWithHandle));
 		// Induced turns are this call's work too, so they settle before results are finalized.
 		await settleInduced(started.map(({ handle }) => handle));
@@ -241,6 +241,7 @@ async function startRuns(
 			const handle: RunHandle = {
 				runId: run.runId,
 				agent: run.definition.name,
+				startedAt: Date.now(),
 				channel,
 				induced: new Set(),
 				inducedErrors: [],
@@ -272,10 +273,10 @@ async function settleInduced(handles: readonly RunHandle[]): Promise<void> {
 }
 
 /** Emit one frame immediately, then every interval, until the returned stop is called. */
-function startProgress(briefed: readonly StartedRun[], startedAt: number, spawnContext: SpawnContext): () => void {
+function startProgress(briefed: readonly StartedRun[], spawnContext: SpawnContext): () => void {
 	const { onProgress } = spawnContext;
 	if (onProgress === undefined) return () => {};
-	const report = (): void => onProgress(briefed.map((entry) => runProgress(entry, startedAt)));
+	const report = (): void => onProgress(briefed.map((entry) => runProgress(entry)));
 	report();
 	const timer = setInterval(report, spawnContext.progressIntervalMs ?? PROGRESS_INTERVAL_MS);
 	timer.unref();
@@ -283,7 +284,7 @@ function startProgress(briefed: readonly StartedRun[], startedAt: number, spawnC
 }
 
 /** One frame of progress for a live run. */
-function runProgress(entry: StartedRun, startedAt: number): RunProgress {
+function runProgress(entry: StartedRun): RunProgress {
 	const snapshot = entry.handle.channel.snapshot();
 	return {
 		agent: entry.handle.agent,
@@ -291,7 +292,8 @@ function runProgress(entry: StartedRun, startedAt: number): RunProgress {
 		model: modelName(entry.run.model),
 		activity: snapshot.activity,
 		...(snapshot.preview === undefined ? {} : { preview: snapshot.preview }),
-		elapsed_ms: Date.now() - startedAt,
+		// A settled run's clock stops, so its line keeps the time the run actually took.
+		elapsed_ms: (snapshot.settledAt ?? Date.now()) - entry.handle.startedAt,
 		usage: subtractUsage(snapshot.usage, entry.handle.usageBase),
 	};
 }
@@ -538,9 +540,11 @@ export function wrapSession(session: AgentSession): AgentChannel {
 		snapshot: () => {
 			const sessionFile = session.sessionFile;
 			const preview = state.preview();
+			const settledAt = state.settledAt();
 			return {
 				activity: state.activity(),
 				...(preview === undefined ? {} : { preview }),
+				...(settledAt === undefined ? {} : { settledAt }),
 				usage: usageFromStats(session.getSessionStats()),
 				...(sessionFile === undefined ? {} : { sessionFile }),
 			};
@@ -555,25 +559,40 @@ const PREVIEW_MAX_CHARS = 80;
  * Latest activity label and streamed content preview. One subscription serves
  * both; it lives as long as the session does.
  */
-function trackSessionState(session: AgentSession): { activity: () => string; preview: () => string | undefined } {
+function trackSessionState(session: AgentSession): {
+	activity: () => string;
+	preview: () => string | undefined;
+	settledAt: () => number | undefined;
+} {
 	let activity = DEFAULT_ACTIVITY;
 	let line = "";
 	let preview: string | undefined;
+	let settledAt: number | undefined;
 	session.subscribe((event) => {
 		const typed = event as ActivityEvent;
 		activity = describeSessionEvent(typed) ?? activity;
-		const update = textUpdate(typed);
-		if (update === undefined) return;
-		if (update.kind === "start") {
-			line = "";
-			return;
-		}
-		const segments = update.text.split("\n");
-		line = segments.length === 1 ? line + update.text : (segments.at(-1) ?? "");
+		settledAt = settledAtAfter(settledAt, typed);
+		line = textLineAfter(line, typed);
 		const trimmed = line.trim();
 		if (trimmed.length > 0) preview = truncatePreview(trimmed);
 	});
-	return { activity: () => activity, preview: () => preview };
+	return { activity: () => activity, preview: () => preview, settledAt: () => settledAt };
+}
+
+/** The settle time after one event: settling sets it, and the next turn clears it. */
+function settledAtAfter(settledAt: number | undefined, event: ActivityEvent): number | undefined {
+	if (event.type === "agent_settled") return Date.now();
+	if (event.type === "turn_start") return undefined;
+	return settledAt;
+}
+
+/** The current text line after one event; a new text block resets it and a delta extends it. */
+function textLineAfter(line: string, event: ActivityEvent): string {
+	const update = textUpdate(event);
+	if (update === undefined) return line;
+	if (update.kind === "start") return "";
+	const segments = update.text.split("\n");
+	return segments.length === 1 ? line + update.text : (segments.at(-1) ?? "");
 }
 
 /** The slice of a session event this extension turns into a progress label. */
@@ -608,6 +627,8 @@ export function describeSessionEvent(event: ActivityEvent): string | undefined {
 			return textUpdate(event)?.kind === "delta" ? "writing" : undefined;
 		case "turn_start":
 			return "thinking";
+		case "agent_settled":
+			return "done";
 		default:
 			return undefined;
 	}

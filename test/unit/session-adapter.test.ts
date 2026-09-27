@@ -125,6 +125,20 @@ test("tracks the latest activity from session events", () => {
 	assert.equal(fake.channel.snapshot().activity, "writing");
 	fake.emit({ type: "message_end", message: { role: "assistant" } });
 	assert.equal(fake.channel.snapshot().activity, "writing", "uninteresting events keep the last label");
+	fake.emit({ type: "agent_settled" });
+	assert.equal(fake.channel.snapshot().activity, "done");
+});
+
+test("tracks when the session settled and clears it when work resumes", () => {
+	const fake = makeFake();
+	fake.emit({ type: "turn_start" });
+	assert.equal(fake.channel.snapshot().settledAt, undefined, "a live run has no settled time");
+	fake.emit({ type: "agent_settled" });
+	assert.equal(typeof fake.channel.snapshot().settledAt, "number");
+	fake.emit({ type: "turn_start" });
+	const resumed = fake.channel.snapshot();
+	assert.equal(resumed.activity, "thinking", "a sibling message starts a new turn");
+	assert.equal(resumed.settledAt, undefined);
 });
 
 test("snapshot carries the streamed text as a one-line preview", () => {
@@ -192,7 +206,12 @@ test("labels only the events worth reporting", () => {
 		describeSessionEvent({ type: "message_update", assistantMessageEvent: { type: "thinking_delta" } }),
 		undefined,
 	);
-	assert.equal(describeSessionEvent({ type: "agent_end" }), undefined);
+	assert.equal(describeSessionEvent({ type: "agent_settled" }), "done");
+	assert.equal(
+		describeSessionEvent({ type: "agent_end" }),
+		undefined,
+		"a run that ended can still be retried or resumed, so it is not done yet",
+	);
 });
 
 test("reduces session stats to the reported usage fields", () => {
