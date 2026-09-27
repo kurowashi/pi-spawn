@@ -549,6 +549,7 @@ test("a settled run reports done with a stopped clock while a sibling still work
 	const frames: RunProgress[][] = [];
 	const harness = makeHarness(DEFINITIONS, async (input, run) => {
 		if (input.agent.name !== "reviewer") {
+			// 50ms spans ~10 frames at the 5ms interval below; the assertions need two.
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			return;
 		}
