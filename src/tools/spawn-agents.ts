@@ -17,6 +17,7 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { definitionRoots } from "../catalog.ts";
 import type { RunRegistry } from "../registry.ts";
 import {
 	createChildChannel,
@@ -59,7 +60,7 @@ const Parameters = Type.Object(
 export interface SpawnToolOptions {
 	registry: RunRegistry;
 	/** Injected so tests can run the whole flow without the SDK. */
-	dependencies?: (context: { cwd: string; agentDir: string }) => SpawnDependencies;
+	dependencies?: (context: { cwd: string; agentDir: string; projectTrusted: boolean }) => SpawnDependencies;
 	nextRunId?: () => string;
 }
 
@@ -71,7 +72,10 @@ export function createSpawnAgentsTool(options: SpawnToolOptions) {
 		parameters: Parameters,
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentDir = getAgentDir();
-			const deps = options.dependencies?.({ cwd: ctx.cwd, agentDir }) ?? buildDependencies(options, ctx, agentDir);
+			const projectTrusted = ctx.isProjectTrusted();
+			const deps =
+				options.dependencies?.({ cwd: ctx.cwd, agentDir, projectTrusted }) ??
+				buildDependencies(options, ctx, agentDir, projectTrusted);
 			const results = await spawnAgents(spawnRequest(params), spawnContext(ctx, params, signal, onUpdate), deps);
 			const usage = totalUsage(results);
 			return {
@@ -192,11 +196,13 @@ function buildDependencies(
 	options: SpawnToolOptions,
 	ctx: { cwd: string; model: unknown; modelRegistry: { getAvailable(): readonly unknown[] } },
 	agentDir: string,
+	projectTrusted: boolean,
 ): SpawnDependencies {
 	const available = ctx.modelRegistry.getAvailable().filter(isModelIdentity);
 	const parent = isModelIdentity(ctx.model) ? ctx.model : undefined;
 	const sessionDir = join(agentDir, "spawn-sessions");
 	return {
+		definitionRoots: definitionRoots(ctx.cwd, agentDir, projectTrusted),
 		agentDir,
 		availableModels: available,
 		parentModel: parent,

@@ -1,16 +1,17 @@
 /**
  * Agent definition discovery and parsing.
  *
- * Reads `<agentDir>/agents/*.md` with YAML frontmatter. Unknown keys are
- * reported as warnings instead of failing, because a definition file may carry
- * keys this extension deliberately does not implement (`async`, ...).
- * A duplicate agent name resolves to the first file in sorted order.
+ * Reads `agents/*.md` under every config root, highest priority first, with
+ * YAML frontmatter. Unknown keys are reported as warnings instead of failing,
+ * because a definition file may carry keys this extension deliberately does
+ * not implement (`async`, ...). A duplicate agent name resolves to the first
+ * file in lookup order.
  */
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentDefinition } from "./types.ts";
 
 /** Keys this extension understands. Everything else is a warning. */
@@ -67,34 +68,47 @@ export function parseAgent(
 	return agent;
 }
 
-/** Discover every definition under `<agentDir>/agents`. Missing directory means no agents. */
-export function discoverAgents(agentDir: string): Catalog {
-	const directory = join(agentDir, "agents");
+/**
+ * Config roots searched for definitions, highest priority first.
+ *
+ * The project root follows Pi's own `.pi` resource convention and is searched
+ * only while project trust is active: an untrusted project must not inject
+ * agent instructions. The user's agent directory always comes last.
+ */
+export function definitionRoots(cwd: string, agentDir: string, projectTrusted: boolean): string[] {
+	return projectTrusted ? [join(cwd, CONFIG_DIR_NAME), agentDir] : [agentDir];
+}
+
+/** Discover every definition under each root's `agents` directory. Missing directories mean no agents. */
+export function discoverAgents(roots: readonly string[]): Catalog {
 	const agents: AgentDefinition[] = [];
 	const warnings: string[] = [];
 	const warn = (message: string): void => {
 		warnings.push(message);
 	};
 
-	let entries: string[];
-	try {
-		entries = readdirSync(directory).filter((entry) => entry.endsWith(".md"));
-	} catch {
-		return { agents, warnings };
-	}
-
-	for (const entry of entries.sort()) {
-		const path = join(directory, entry);
-		let content: string;
+	for (const root of roots) {
+		const directory = join(root, "agents");
+		let entries: string[];
 		try {
-			content = readFileSync(path, "utf8");
-		} catch (error) {
-			warn(`${path}: cannot read (${describe(error)})`);
+			entries = readdirSync(directory).filter((entry) => entry.endsWith(".md"));
+		} catch {
 			continue;
 		}
-		const agent = parseAgent(content, path, warn);
-		if (agent === undefined) continue;
-		agents.push(agent);
+
+		for (const entry of entries.sort()) {
+			const path = join(directory, entry);
+			let content: string;
+			try {
+				content = readFileSync(path, "utf8");
+			} catch (error) {
+				warn(`${path}: cannot read (${describe(error)})`);
+				continue;
+			}
+			const agent = parseAgent(content, path, warn);
+			if (agent === undefined) continue;
+			agents.push(agent);
+		}
 	}
 	return { agents, warnings };
 }

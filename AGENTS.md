@@ -31,6 +31,7 @@
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
+| 定義の解決順は project → user。project 定義は trust 済みのときだけ読む | `test/unit/catalog.test.ts` + `test/integration/spawn-agents.test.ts` | `src/catalog.ts` の `definitionRoots` / `discoverAgents` |
 | resume は永続化済みの run だけを対象にする(run id = セッション id) | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
 | resume の探索は `cwd` 一致で行う | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
@@ -86,6 +87,8 @@
    子の使用量が加算されていること(`/session` で確認)。
 6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が
    返ること。`session_file` が前回と同じで、usage が再開後の分だけであること。
+7. `<project>/.pi/agents/` の定義が、信頼していないプロジェクトではカタログに現れず spawn も
+   失敗し、trust 済み(`--approve` など)では現れて spawn できること。
 
 ## 手動レビュー(自動検証の対象外): ツール面の必要十分性
 

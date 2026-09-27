@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { discoverAgents, formatCatalog, parseAgent } from "../../src/catalog.ts";
+import { definitionRoots, discoverAgents, formatCatalog, parseAgent } from "../../src/catalog.ts";
 
 function parse(content: string): ReturnType<typeof parseAgent> {
 	return parseAgent(content, "test.md", () => {});
@@ -117,7 +117,7 @@ test("discovers definitions alphabetically and keeps duplicates", () => {
 		"writer.md": "---\nname: writer\ndescription: Writes the draft.\ntools: read, write\n---\n",
 		"missing-name.md": "---\ndescription: No name here.\n---\n",
 	});
-	const { agents, warnings } = discoverAgents(agentDir);
+	const { agents, warnings } = discoverAgents([agentDir]);
 	assert.deepEqual(
 		agents.map((agent) => agent.name),
 		["reviewer", "reviewer", "writer"],
@@ -127,7 +127,7 @@ test("discovers definitions alphabetically and keeps duplicates", () => {
 
 test("a missing agents directory is not an error", () => {
 	const agentDir = makeAgentDir({});
-	const { agents, warnings } = discoverAgents(join(agentDir, "nope"));
+	const { agents, warnings } = discoverAgents([join(agentDir, "nope")]);
 	assert.deepEqual(agents, []);
 	assert.deepEqual(warnings, []);
 });
@@ -135,7 +135,7 @@ test("a missing agents directory is not an error", () => {
 test("an unreadable entry is reported and skipped", () => {
 	const agentDir = makeAgentDir({ "good.md": "---\nname: good\n---\n" });
 	mkdirSync(join(agentDir, "agents", "unreadable.md"));
-	const { agents, warnings } = discoverAgents(agentDir);
+	const { agents, warnings } = discoverAgents([agentDir]);
 	assert.deepEqual(
 		agents.map((agent) => agent.name),
 		["good"],
@@ -195,6 +195,19 @@ test("the catalog lists a duplicated name once, matching spawn resolution", () =
 		"a-general.md": "---\nname: reviewer\ndescription: Researches.\n---\n",
 		"b-review.md": "---\nname: reviewer\ndescription: Reviews.\n---\n",
 	});
-	const { agents } = discoverAgents(agentDir);
+	const { agents } = discoverAgents([agentDir]);
 	assert.equal(formatCatalog(agents), "agents: reviewer — Researches.");
+});
+
+test("earlier roots win when the same name appears twice", () => {
+	const project = makeAgentDir({ "reviewer.md": "---\nname: reviewer\ndescription: Project.\n---\n" });
+	const user = makeAgentDir({ "reviewer.md": "---\nname: reviewer\ndescription: User.\n---\n" });
+	const { agents } = discoverAgents([project, user]);
+	assert.equal(agents[0]?.path, join(project, "agents", "reviewer.md"));
+	assert.equal(formatCatalog(agents), "agents: reviewer — Project.");
+});
+
+test("the project root is searched first, and only while trusted", () => {
+	assert.deepEqual(definitionRoots("/work", "/home/u/.pi/agent", true), [join("/work", ".pi"), "/home/u/.pi/agent"]);
+	assert.deepEqual(definitionRoots("/work", "/home/u/.pi/agent", false), ["/home/u/.pi/agent"]);
 });

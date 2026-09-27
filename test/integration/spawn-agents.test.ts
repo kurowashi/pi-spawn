@@ -144,6 +144,7 @@ interface Harness {
 function makeHarness(
 	definitions: Record<string, string>,
 	script: (input: CreateChannelInput, run: FakeRun, tools: ToolDefinition[]) => Promise<void>,
+	globalRoot?: string,
 ): Harness {
 	const registry = createRunRegistry();
 	const runs = new Map<string, FakeRun>();
@@ -151,6 +152,7 @@ function makeHarness(
 	const cwd = makeAgentDir(definitions);
 	let counter = 0;
 	const deps: SpawnDependencies = {
+		definitionRoots: globalRoot === undefined ? [cwd] : [cwd, globalRoot],
 		agentDir: cwd,
 		availableModels: [
 			{ provider: "fixture", id: "model-x" },
@@ -350,6 +352,21 @@ test("the reported model is the resolved one", async () => {
 	const results = await spawn(harness, BOTH_TASKS);
 	assert.equal(results[0]?.model, "fixture/model-x", "the definition model");
 	assert.equal(results[1]?.model, "fixture/parent", "the parent model");
+});
+
+test("a project root definition wins over the global one", async () => {
+	const globalRoot = makeAgentDir({
+		"reviewer.md": "---\nname: reviewer\ndescription: Global.\n---\nGlobal body.\n",
+	});
+	const harness = makeHarness(
+		{ "reviewer.md": "---\nname: reviewer\ndescription: Project.\n---\nProject body.\n" },
+		async () => {},
+		globalRoot,
+	);
+
+	await spawn(harness, { tasks: [{ agent: "reviewer", task: "review" }] });
+
+	assert.equal(harness.inputs[0]?.agent.body, "Project body.");
 });
 
 test("an unknown agent fails the whole call before anything starts", async () => {

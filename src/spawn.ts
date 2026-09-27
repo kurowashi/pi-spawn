@@ -117,6 +117,8 @@ export interface ChildToolInput {
 }
 
 export interface SpawnDependencies {
+	/** Config roots searched for definitions, highest priority first. */
+	definitionRoots: readonly string[];
 	agentDir: string;
 	availableModels: readonly ModelIdentity[];
 	parentModel: ModelIdentity | undefined;
@@ -310,7 +312,7 @@ function withInducedErrors(result: SpawnResult, errors: readonly string[]): Spaw
 /** Resolve definition and model before anything starts. */
 /** Resolve definition, model, and any resumed transcript before anything starts. */
 function planRun(task: SpawnTask, defaultCwd: string, deps: SpawnDependencies): PlannedRun {
-	const definition = findDefinition(task.agent, deps.agentDir);
+	const definition = findDefinition(task.agent, deps.definitionRoots);
 	const resolution = resolveModel({
 		taskReference: task.model,
 		definitionReference: definition.model,
@@ -339,8 +341,8 @@ function resolveResume(runId: string, cwd: string, deps: SpawnDependencies): { f
 	);
 }
 
-function findDefinition(name: string, agentDir: string): AgentDefinition {
-	const { agents } = discoverAgents(agentDir);
+function findDefinition(name: string, roots: readonly string[]): AgentDefinition {
+	const { agents } = discoverAgents(roots);
 	const definition = agents.find((agent) => agent.name === name);
 	if (definition !== undefined) return definition;
 	const known = agents.map((agent) => agent.name).join(", ");
