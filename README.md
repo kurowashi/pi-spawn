@@ -1,31 +1,31 @@
 # pi-spawn
 
-Pi から子エージェントを並列に起動し、**兄弟エージェント同士が直接メッセージをやり取り**できる拡張です。
+Pi から子エージェントを並列に起動し、
+**兄弟エージェント同士が直接メッセージをやり取り**できる拡張です。インストール後、
+プロジェクトまたはホームディレクトリの `agents/*.md` に子を定義し、
+親セッションから `spawn_agents` で起動します。
 
 ## 実行モデル
 
-pi-spawn には親セッションと子セッションがあります。
-
-- **親セッション**: いまの Pi セッション。`spawn_agents` で子を起動します
+- **親セッション**: いまの Pi セッション。`spawn_agents` で子を起動し、全子の結果を受け取ります
 - **子セッション**: 親から委譲された1つのタスクを実行します
-- **兄弟**: 同じ `spawn_agents` 呼び出しで起動された子同士です
+- **兄弟**: 同じ `spawn_agents` 呼び出しで起動された子同士。`message_agent` で直接連絡できます
 
 `spawn_agents` は同期的なツール呼び出しです。親のターンは `spawn_agents` から戻るまで終了せず、
-全子と、`message_agent` の配送で始まったターンの完了を待ちます。そのため、親を待たせずに子を
-バックグラウンド実行することはできません。
+全子と、メッセージで始まったターン(兄弟からのメッセージで始まるターン)の完了を待ちます。そのため、
+親を待たせずに子をバックグラウンド実行することはできません。
 
-待つ関係は次の1箇所だけです。子は誰も待ちません。メッセージは一方通行で、返信は受け手の新しい
-ターンとして届きます。
+待機するのは親だけです。子は他のセッションを待ちません。
 
 | 待つ側 | 待たれる側 | 条件 |
 |---|---|---|
-| 親 | 全子と、配送で始まったターン | 常に。`spawn_agents` が返るまで |
+| 親 | 全子と、メッセージで始まったターン | 常に。`spawn_agents` が返るまで |
 
-- 配送で始まったターンは、送信元が待たなくても親が `spawn_agents` から戻るまで実行されます
-- 親は `spawn_agents` の実行中で返答できないため、子から親モデルへ質問はできません。判断基準はタスク文で渡し、曖昧さは spawn 前に親が人間へ確認します
+- 親は `spawn_agents` の実行中は応答できないため、子から親セッションへ質問はできません。
+  判断基準はタスク文で渡し、曖昧さは spawn 前に親が人間へ確認します
 - 親のターンが中止されると、子も中断されます
 
-子セッションの既定:
+### 子セッションの既定
 
 - 委譲の深さは既定で 1 です。子を起動できるのは、定義に `extensions: true` を書いた子だけです
 - 子の作業ディレクトリは既定で親と同じです
@@ -41,17 +41,20 @@ pi-spawn には親セッションと子セッションがあります。
 
 ## インストール
 
-GitHub から入れます。
+### GitHub からインストールする
+
+通常はこちらを使います。
 
 ```bash
 pi install git:github.com/kurowashi/pi-spawn
 ```
 
-ref を固定する場合は `pi install git:github.com/kurowashi/pi-spawn@<tag|commit>`。追加後は Pi を
-再起動すると読み込まれ、`pi list` に現れます。
+ref を固定する場合は `pi install git:github.com/kurowashi/pi-spawn@<tag|commit>`。
 
-ローカルの作業コピーを使う場合は `~/.pi/agent/settings.json` の `packages` に、**その
-settings.json からの相対パス**で追加します。既存の要素は残してください。
+### ローカルの作業コピーを使う
+
+pi-spawn を開発している場合は、`~/.pi/agent/settings.json` の `packages` に、
+**その settings.json からの相対パス**で追加します。既存の要素は残してください。
 
 ```json
 {
@@ -59,18 +62,25 @@ settings.json からの相対パス**で追加します。既存の要素は残�
 }
 ```
 
+どちらの場合も、追加後は Pi を再起動すると読み込まれ、`pi list` に現れます。
+
 ## 子エージェントの定義
 
-子にする agent は 2 箇所の `agents/*.md` に用意します。ファイル名は任意で、frontmatter の
-`name` が呼び出し名になります。最小構成は `name` と本文だけです。
+子にする agent は 2 箇所の `agents/*.md` に用意します。ファイル名は任意で、
+frontmatter の `name` が呼び出し名になります。
+プロジェクト側の定義は project trust(Pi がプロジェクトを信頼済みとして扱う状態)のときだけ読みます。
+信頼は起動時の `--approve` か `/trust` で与えます。
 
 | 場所 | 用途 | 必要条件 |
 |---|---|---|
 | `<project>/.pi/agents/*.md` | プロジェクト固有の定義 | project trust |
 | `~/.pi/agent/agents/*.md` | 全プロジェクト共通の定義 | なし |
 
-同じ `name` の定義が複数ある場合は、プロジェクト側が優先されます。同じ場所ではファイル名の
-昇順で最初の1件だけが有効です(カタログにも1件だけ表示されます)。
+同じ `name` の定義が複数ある場合は、プロジェクト側が優先されます。
+同じ場所ではファイル名の昇順で最初の1件だけが有効です(カタログにも1件だけ表示されます)。
+
+必須は `name` と本文だけです。次の例の `description` は任意で、
+モデルが子を選ぶときの説明になります。
 
 ```markdown
 ---
@@ -83,27 +93,29 @@ description: ドキュメントのレビュー役
 
 ### frontmatter の項目
 
-| キー | 必須 | 意味 |
-|---|---|---|
-| `name` | ○ | 呼び出しに使う名前 |
-| `description` | | モデルに渡す説明 |
-| `tools` | | 子に許可するツール |
-| `model` | | 既定モデル(`provider/id` 形式) |
-| `thinking` | | 推論強度(off / minimal / low / medium / high / xhigh / max) |
-| `systemPromptMode` | | `append`(既定)/ `replace` |
-| `inheritProjectContext` | | 作業ディレクトリの `AGENTS.md` を子に渡すか(既定 true) |
-| `inheritSkills` | | skills を子に渡すか(既定 true) |
-| `extensions` | | グローバル設定の拡張を子で読み込むか(既定 false) |
+| キー | 必須 | 既定 | 意味 |
+|---|---|---|---|
+| `name` | ○ | — | 呼び出しに使う名前 |
+| `description` | | — | モデルに渡す説明 |
+| `tools` | | すべてのツール | 子に許可するツール |
+| `model` | | 親セッション | 使用モデル(`provider/id` 形式) |
+| `thinking` | | Pi の既定 | 推論強度(off / minimal / low / medium / high / xhigh / max) |
+| `systemPromptMode` | | `append` | 本文の適用方法(`append` / `replace`) |
+| `inheritProjectContext` | | true | 作業ディレクトリの `AGENTS.md` を子に渡すか |
+| `inheritSkills` | | true | skills を子に渡すか |
+| `extensions` | | false | グローバル設定の拡張を子で読み込むか |
 
-- `tools`: カンマ区切りの文字列か配列で指定します。空リストなら子専用ツール(`message_agent`)だけ、無指定なら利用可能な全ツールを許可します。子が持たない名前は無視します
-- 本文: 既定で Pi のシステムプロンプトに追加されます。`systemPromptMode: replace` なら本文だけになります
+- `tools`: カンマ区切りの文字列か配列で指定します。空リストなら子専用ツール(`message_agent`)だけ、
+  無指定なら利用可能な全ツールを許可します。子が持たない名前は無視します
+- `model`: 使用モデルは `tasks[].model` → 定義の `model` → 親セッションの順で決まります
+- 本文: 既定で Pi のシステムプロンプトに追加されます。
+  `systemPromptMode: replace` なら本文だけになります
 - `extensions: true`: MCP などの拡張を読み込み、子は `spawn_agents` も受け取ります
+- 値が不正な項目は警告して無視します(`systemPromptMode` は `append` に戻します)
 
 ### 定義の反映
 
 - 未知のキー(`async` など)は警告して無視します
-- 同名の定義はプロジェクト → ユーザーの順で先勝ちです。同じ場所ではファイル名順です
-- project trust がないと `<project>/.pi/agents/` は読まれません
 - 定義の変更は次に子を起動したときから反映されます
 - 定義の一覧はモデルに `agents: <name> — <description>` の1行として注入されます
 
@@ -119,18 +131,29 @@ spawn_agents({
 })
 ```
 
+| 引数 | 必須 | 既定 | 意味 |
+|---|---|---|---|
+| `tasks` | ○ | — | 同時に走らせるタスク(1件以上) |
+| `tasks[].agent` | ○ | — | 子エージェント定義の `name` |
+| `tasks[].task` | ○ | — | 委譲するタスク文 |
+| `tasks[].model` | | 定義の `model` | 使用モデルの上書き(`provider/id`) |
+| `tasks[].cwd` | | 親と同じ | 子の作業ディレクトリ |
+| `tasks[].resume_run_id` | | — | 再開する run の id |
+| `context` | | `fresh` | `fresh`(空) / `fork`(親の会話をコピー) |
+| `timeout_seconds` | | 制限なし | 呼び出し全体の制限時間(秒) |
+
 単独で委譲する:
 
 ```text
 spawn_agents({ tasks: [{ agent: "reviewer", task: "README の下書きをレビューして" }] })
 ```
 
-並列に走らせ、子同士で相談させる:
+並列に走らせる:
 
 ```text
 spawn_agents({
   tasks: [
-    { agent: "writer", task: "下書きを書いて。不明点は reviewer に message_agent で質問すること。返信は次のターンで届く" },
+    { agent: "writer", task: "構成案を書いて" },
     { agent: "reviewer", task: "構成案をレビューして" }
   ]
 })
@@ -140,25 +163,34 @@ spawn_agents({
 
 ## 子同士のメッセージ
 
-子は `message_agent` で兄弟にメッセージを送ります。`message_agent` は子専用です。
+子は `message_agent` で兄弟にメッセージを送ります。`message_agent` は子専用です。使わせるには、
+タスク文で指示します:
+
+```text
+spawn_agents({
+  tasks: [
+    { agent: "writer", task: "下書きを書いて。不明点は reviewer に message_agent で質問すること" },
+    { agent: "reviewer", task: "構成案をレビューして" }
+  ]
+})
+```
 
 ```text
 message_agent({ to, text })
 ```
 
-| 引数 | 意味 |
-|---|---|
-| `to` | 宛先。兄弟の agent 名か run id |
-| `text` | 送る本文 |
+| 引数 | 必須 | 意味 |
+|---|---|---|
+| `to` | ○ | 宛先。兄弟の agent 名か run id |
+| `text` | ○ | 送る本文 |
 
-### 返信
+### 配送とターン
 
-メッセージは一方通行です。返信は受け手の新しいターンとして届きます。
+メッセージは一方通行です。送信側のツール結果は `delivered` で、相手の返答は返りません。
+返答は受け手の新しいターンとして届きます。
 
 - 待機中の兄弟へは、新しいターンを開始して届きます
 - 実行中の兄弟へは、今のターンの切れ目で届きます
-- 配送で始まったターンは、親が `spawn_agents` から戻るまで実行されます
-- 子の結果(`output`)は、会話後の最新の発話です
 
 ### 宛先の指定
 
@@ -172,32 +204,40 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 
 ## 実行結果
 
-呼び出し結果は `{ agent, run_id, model, output }` の配列です。run が失敗した場合は `output` の
-代わりに `error` が入り、兄弟の結果は失われません。未知の agent や解決できない `model` は、
-何も起動せずにエラーになります。
+呼び出し結果は run ごとの結果の配列です。
 
-- `model`: 実際に使われたモデル。解決順は `tasks[].model` → 定義の `model` → 親セッションのモデルです
-- `output`: 会話後の最新の発話です。メッセージで始まったターンの発話も含みます
-- `usage`: 子のトークンとコスト。再開した run では再開後に加算された分だけです。親セッションの統計にも加算されます
-- `session_file`: 子セッションの保存先(`~/.pi/agent/spawn-sessions/`)。全文は `pi --session <path>` で開けます
+| フィールド | 意味 |
+|---|---|
+| `agent` | 定義名 |
+| `run_id` | run の識別子。`resume_run_id` に渡すと再開できます |
+| `model` | 実際に使われたモデル |
+| `resumed_from` | 再開元の run id(再開した run だけ) |
+| `output` | 最後の発話。メッセージで始まったターンの発話も含みます |
+| `error` | 失敗した run だけに入ります。このとき `output` はありません |
+| `usage` | 子のトークンとコスト。親セッションの統計にも加算されます |
+| `session_file` | 子セッションの保存先。全文は `pi --session <path>` で開けます |
 
-`timeout_seconds` は呼び出し全体の制限時間(秒)です。無指定なら制限はありません。過ぎたら全子を
-中断します。
+- 再開した run の `usage` は、再開後に加算された分だけです
+- run が失敗しても、兄弟の結果は失われません
+- 未知の agent や解決できない `model` は、何も起動せずにエラーになります
+- `timeout_seconds` は呼び出し全体の制限時間(秒)です。無指定なら制限はありません。
+  過ぎたら全子を中断します
 
 ## 高度な使い方
 
 ### 親の会話文脈を引き継ぐ
 
-`spawn_agents({ context: "fork" })` で、親の会話をコピーした状態から子を始めます。既定は
-`fresh`(空の文脈)です。
+`spawn_agents({ context: "fork" })` で、親の会話をコピーした状態から子を始めます。
+既定は `fresh`(空の文脈)です。
 
 ### run を再開する
 
-`tasks[].resume_run_id` に以前の run id を渡すと、その子セッションを読み直し、同じ文脈の続きと
-して `task` を実行します。
+`tasks[].resume_run_id` に以前の run id を渡すと、その子セッションを読み直し、
+同じ文脈の続きとして `task` を実行します。
 
 - `agent` / `model` / `cwd` は今回の指定が使われます
-- run は起動時の `cwd` で探索するため、別の `cwd` で起動した run を再開するときは同じ `cwd` を渡します
+- run は起動時の `cwd` で探索するため、
+  別の `cwd` で起動した run を再開するときは同じ `cwd` を渡します
 - 再開できるのは run id をセッション id として保存した run だけです
 
 ### 子にさらに委譲する(多段委譲)
@@ -207,35 +247,43 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 
 ## 制約と回避策
 
-すべて意図的な非目標です。待機モデルに由来する制約の理由は「実行モデル」で説明しています。
+これらはすべて意図的な制約です。待機モデルに由来する理由は [実行モデル](#実行モデル)
+で説明しています。
 
 | 制約 | 回避策 |
 |---|---|
 | バックグラウンド実行(親を待たせない) | 長い作業は分割して順に起動する |
-| 子から親モデルへの質問(返答待ち) | タスク文に判断基準を書く。曖昧さは spawn 前に親が解消する |
-| 子が同一ターン内で返信を待つ | 返信は次のターンで届く。会話はターンで進む |
+| 子から親セッションへの質問 | タスク文に判断基準を書く。曖昧さは spawn 前に解消する |
+| 子が同一ターン内で返信を待つ | 返信は次のターンで届く。会話はターンで進める |
 | 親から実行中の子への指示 | タイムアウトで止めて出し直す |
 | 実行中の子の全文をその場で見る | 完了後に `pi --session` で開く(進捗は活動ラベル) |
 | 並列での書き込み隔離 | 読み取り中心のタスクに限定する |
 | 子の出力の自動検証 | 親がテストや差分確認を実行する |
-| コスト上限の強制 | 結果の `usage` とセッション統計で確認する(上限なし) |
+| コスト上限の強制 | 上限はない。結果の `usage` とセッション統計で確認する |
 
 ## 開発者向け情報
 
-この節は pi-spawn 自体を開発する人向けです。実行時依存はなく、依存はすべて devDependency。
+この節は pi-spawn 自体を開発する人向けです。実行時依存はなく、依存はすべて devDependency です。
+コマンドはリポジトリのルートで実行します。
 
 ```bash
 npm install
-npm run verify        # 完了条件: biome + tsc + 全テスト + カバレッジ閾値
-npm test              # 全テスト
-npm run test:coverage # unit と integration だけをカバレッジ閾値付きで
-npm run fix           # 自動修正
+npm run verify
+npm test
+npm run test:coverage
+npm run fix
 ```
 
-コミット前に lefthook が format/lint/型検査を実行する。CI はフックと同じ検査を独立に実行する
-(フックは利便性のためのもので、ゲートの権威ではない)。ツール定義の大きさは契約テストが
-400 トークン以下に拘束する。
+- `npm run verify`: 完了条件を検証します(biome + tsc + 全テスト + カバレッジ閾値)
+- `npm test`: 全テストを実行します
+- `npm run test:coverage`: unit と integration だけをカバレッジ閾値付きで実行します
+- `npm run fix`: 自動修正を実行します
 
-フックの有効化は `npx lefthook install` を手動で実行する。`package.json` の lifecycle script
-(`prepare` / `postinstall`) には置かない: `pi install git:...` は `npm install --omit=dev` を
-実行するため、devDependency の lefthook が無い状態で script が走るとインストールごと失敗する。
+コミット前に lefthook が format/lint/型検査を実行します。
+CI はフックと同じ検査を独立に実行します(フックは利便性のためのもので、ゲートの権威ではありません)。
+契約テストが、ツール定義の大きさを 400 トークン以下に制限しています。
+
+フックの有効化は `npx lefthook install` を手動で実行します。
+`package.json` の lifecycle script(`prepare` / `postinstall`)には置きません:
+`pi install git:...` は `npm install --omit=dev` を実行するため、
+devDependency の lefthook が無い状態で script が走るとインストールごと失敗します。
