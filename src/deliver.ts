@@ -18,11 +18,11 @@ export interface DeliverRequest {
 }
 
 /**
- * One message as the recipient sees it: a `from_run_id` header, then the text.
+ * One message as the recipient sees it: a `from_session_id` header, then the text.
  * The header is the only way the recipient can attribute and answer a message.
  */
 export function formatMessage(from: MessageSender, text: string): string {
-	return `message_agent from_run_id=${from.runId} name=${JSON.stringify(from.name)}\n\n${text}`;
+	return `message_agent from_session_id=${from.sessionId} name=${JSON.stringify(from.name)}\n\n${text}`;
 }
 
 /**

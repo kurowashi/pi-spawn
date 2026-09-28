@@ -29,6 +29,7 @@ function makeFake(
 		shutdownError?: string;
 		stats?: FakeStats;
 		sessionFile?: string;
+		leafId?: string;
 		contextUsage?: ContextUsage;
 	} = {},
 ): Fake {
@@ -41,6 +42,7 @@ function makeFake(
 	const session = {
 		messages: options.messages ?? [],
 		sessionFile: options.sessionFile,
+		sessionManager: { getLeafId: () => options.leafId ?? null },
 		getSessionStats: () => stats,
 		getContextUsage: () => options.contextUsage,
 		prompt: async (text: string) => void calls.push(`prompt:${text}`),
@@ -115,21 +117,24 @@ test("releases the session even when a shutdown handler fails", async () => {
 	assert.ok(fake.calls.includes("dispose"));
 });
 
-test("snapshot reports billed usage and the transcript path", () => {
+test("snapshot reports billed usage, the transcript path, and the current entry", () => {
 	const fake = makeFake({
 		sessionFile: "/tmp/child.jsonl",
+		leafId: "entry-9",
 		stats: { tokens: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, total: 100 }, cost: 0.5 },
 	});
 	assert.deepEqual(fake.channel.snapshot(), {
 		activity: "starting",
 		usage: { input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cost: 0.5 },
 		sessionFile: "/tmp/child.jsonl",
+		entryId: "entry-9",
 	});
 });
 
-test("snapshot omits the transcript path for an in-memory run", () => {
+test("snapshot omits the transcript path and entry for an in-memory run", () => {
 	const snapshot = makeFake().channel.snapshot();
 	assert.equal(snapshot.sessionFile, undefined);
+	assert.equal(snapshot.entryId, undefined);
 	assert.deepEqual(snapshot.usage, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 });
 

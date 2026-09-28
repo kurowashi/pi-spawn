@@ -68,7 +68,7 @@ async function pickRun(ctx: ExtensionCommandContext, runs: readonly RunHandle[])
 /** One run's line: identity, activity, model, context, and cost. */
 export function describeRun(handle: RunHandle): string {
 	const status = statusOf(handle);
-	const parts = [`${handle.name} (${handle.agent}, ${handle.runId})`];
+	const parts = [`${handle.name} (${handle.agent}, ${handle.sessionId})`];
 	if (status !== undefined) parts.push(`${status.activity} (${formatElapsed(status.elapsedMs)})`);
 	parts.push(handle.model);
 	if (status?.context !== undefined) parts.push(contextText(status.context));
@@ -111,11 +111,11 @@ async function followRun(ctx: ExtensionCommandContext, handle: RunHandle, regist
 				{
 					name: handle.name,
 					agent: handle.agent,
-					runId: handle.runId,
+					sessionId: handle.sessionId,
 					model: handle.model,
 					sessionFile: () => sessionFileOf(handle),
 					status: () => statusOf(handle),
-					live: () => registry.list().some((candidate) => candidate.runId === handle.runId),
+					live: () => registry.list().some((candidate) => candidate.sessionId === handle.sessionId),
 					rows: () => tui.terminal.rows,
 					requestRender: () => tui.requestRender(),
 					done,

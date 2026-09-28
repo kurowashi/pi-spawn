@@ -29,12 +29,12 @@ const MAX_TOP_LEVEL_PARAMETERS = 3;
 /** The exact top-level parameter names per tool; a rename is a model-facing surface change. */
 const EXPECTED_PARAMETERS: Record<string, string[]> = {
 	spawn_agents: ["tasks"],
-	message_agent: ["target_run_id", "text"],
+	message_agent: ["target_session_id", "text"],
 };
 
 /** The child-facing surface, built exactly as spawn_agents builds it. */
 function childToolsForTest(): ToolDefinition[] {
-	return childTools({ registry: createRunRegistry(), self: { runId: "run-1", name: "self" } });
+	return childTools({ registry: createRunRegistry(), self: { sessionId: "run-1", name: "self" } });
 }
 
 /** The subset of JSON Schema this contract reads from a TypeBox schema. */

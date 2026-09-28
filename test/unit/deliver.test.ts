@@ -8,9 +8,9 @@ import { deliverMessage } from "../../src/deliver.ts";
 import { createRunRegistry, resolveTarget } from "../../src/registry.ts";
 import type { AgentChannel, RunHandle } from "../../src/types.ts";
 
-function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
+function handle(sessionId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
 	return {
-		runId,
+		sessionId,
 		name: agent,
 		agent,
 		model: "fixture/model",
@@ -30,11 +30,11 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 	};
 }
 
-test("resolves an exact run id", () => {
+test("resolves an exact session id", () => {
 	const runs = [handle("aaa", "reviewer"), handle("bbb", "reviewer")];
 	const byId = resolveTarget("bbb", runs);
 	assert.ok(byId.ok);
-	assert.equal(byId.handle.runId, "bbb");
+	assert.equal(byId.handle.sessionId, "bbb");
 });
 
 test("an agent name is not an address", () => {
@@ -55,14 +55,14 @@ test("the registry only exposes live runs", () => {
 });
 
 /** The sender every delivery test uses; the envelope it produces is pinned in one test below. */
-const FROM = { runId: "aaa", name: "reviewer" };
+const FROM = { sessionId: "aaa", name: "reviewer" };
 
 test("delivery is one-way, whatever the recipient is doing", async () => {
 	const calls: string[] = [];
 	const target = handle("bbb", "writer", { deliver: async (text) => void calls.push(`deliver:${text}`) });
 	const outcome = await deliverMessage({ target, from: FROM, text: "hi" });
 	assert.deepEqual(outcome, { delivered: true });
-	assert.deepEqual(calls, [`deliver:message_agent from_run_id=aaa name="reviewer"\n\nhi`]);
+	assert.deepEqual(calls, [`deliver:message_agent from_session_id=aaa name="reviewer"\n\nhi`]);
 });
 
 test("delivery returns before the turn it started settles", async () => {

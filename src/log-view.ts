@@ -35,7 +35,7 @@ export interface LogViewStatus {
 export interface LogViewInput {
 	name: string;
 	agent: string;
-	runId: string;
+	sessionId: string;
 	model: string;
 	/** Persisted transcript; undefined while the run has none. */
 	sessionFile(): string | undefined;
@@ -138,7 +138,10 @@ export class LogView {
 	}
 
 	private title(width: number): string {
-		return this.fit(this.theme.fg("accent", `${this.input.name} (${this.input.agent}, ${this.input.runId})`), width);
+		return this.fit(
+			this.theme.fg("accent", `${this.input.name} (${this.input.agent}, ${this.input.sessionId})`),
+			width,
+		);
 	}
 
 	private status(width: number): string {

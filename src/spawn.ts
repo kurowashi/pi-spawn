@@ -98,7 +98,8 @@ function notFound<T extends ModelIdentity>(
 }
 
 export interface CreateChannelInput {
-	runId: string;
+	/** Session id for a new run; the stored session's id when resuming. */
+	sessionId: string;
 	agent: AgentDefinition;
 	cwd: string;
 	agentDir: string;
@@ -106,12 +107,14 @@ export interface CreateChannelInput {
 	customTools: ToolDefinition[];
 	/** Parent conversation entries when the agent definition sets `inheritConversation`. */
 	forkEntries?: FileEntry[];
+	/** Parent position the copied conversation ends at, when forking a persisted transcript. */
+	forkEntryId?: string;
 	/** Directory for persisted child transcripts. Undefined keeps the run in memory. */
 	sessionDir?: string;
 	/** Parent session file; needed to fork a persisted transcript. */
 	parentSessionFile?: string;
-	/** Stored transcript to continue instead of starting fresh. */
-	resumeSessionFile?: string;
+	/** Stored transcript and branch point to continue instead of starting fresh. */
+	resume?: { sessionFile: string; entryId: string };
 }
 
 /** Everything the child-facing tools need for one run. */
@@ -130,9 +133,12 @@ export interface SpawnDependencies {
 	registry: RunRegistry;
 	/** Directory for persisted child transcripts. Fake channels may omit it. */
 	sessionDir?: string;
-	/** Resolve a persisted run id to its transcript; `cwd` is the working directory the run used. */
-	findRunSession(runId: string, cwd: string): string | undefined;
-	nextRunId(): string;
+	/** Resolve a persisted session id to its transcript; `cwd` is the working directory the run used. */
+	findRunSession(sessionId: string, cwd: string): string | undefined;
+	/** Whether the transcript contains the entry a resume would branch from. */
+	sessionHasEntry(sessionFile: string, entryId: string): boolean;
+	/** Session id for a new run; a resumed run keeps the stored session's id. */
+	nextSessionId(): string;
 	createChannel(input: CreateChannelInput): Promise<AgentChannel>;
 	childTools(input: ChildToolInput): ToolDefinition[];
 }
@@ -148,6 +154,8 @@ export interface SpawnContext {
 	signal?: AbortSignal;
 	/** Parent conversation entries, read only when a definition sets `inheritConversation`. */
 	parentEntries?: () => FileEntry[];
+	/** Parent position the conversation ends at, so a copied transcript resumes on the active branch. */
+	parentEntryId?: string;
 	/** Parent session file, when the parent is persisted. */
 	parentSessionFile?: string;
 	/** Called once immediately, then every interval, with each live run's state. */
@@ -162,10 +170,11 @@ interface PlannedRun {
 	/** Display label for this run. */
 	name: string;
 	model: ModelIdentity;
-	runId: string;
+	/** The stored session's id, or a new id for a fresh run. */
+	sessionId: string;
 	cwd: string;
-	/** The stored transcript this run continues, when resume_run_id is set. */
-	resume?: { from: string; sessionFile: string };
+	/** The stored transcript and branch point this run continues, when resuming. */
+	resume?: { sessionId: string; entryId: string; sessionFile: string };
 }
 
 /** A run whose channel exists and whose peer list is already known. */
@@ -189,6 +198,7 @@ export async function spawnAgents(
 ): Promise<SpawnResult[]> {
 	const names = displayNames(request.tasks);
 	const planned = request.tasks.map((task, index) => planRun(task, names[index] ?? task.agent, spawnContext.cwd, deps));
+	assertDistinctSessions(planned);
 
 	const started = await startRuns(planned, spawnContext, deps);
 
@@ -214,12 +224,12 @@ export async function spawnAgents(
 		const settled = await Promise.all(briefed.map(runWithHandle));
 		// Induced turns are this call's work too, so they settle before results are finalized.
 		await settleInduced(started.map(({ handle }) => handle));
-		const errorsByRun = new Map(started.map(({ handle }) => [handle.runId, handle.inducedErrors] as const));
-		return settled.map((entry) => finalizeResult(entry, errorsByRun.get(entry.handle.runId) ?? []));
+		const errorsByRun = new Map(started.map(({ handle }) => [handle.sessionId, handle.inducedErrors] as const));
+		return settled.map((entry) => finalizeResult(entry, errorsByRun.get(entry.handle.sessionId) ?? []));
 	} finally {
 		stopProgress?.();
 		stopWatching();
-		for (const { handle } of started) deps.registry.remove(handle.runId);
+		for (const { handle } of started) deps.registry.remove(handle.sessionId);
 		await disposeAll(started);
 	}
 }
@@ -268,21 +278,26 @@ async function startRuns(
 	const outcomes = await Promise.allSettled(
 		planned.map(async (run) => {
 			const channel = await deps.createChannel({
-				runId: run.runId,
+				sessionId: run.sessionId,
 				agent: run.definition,
 				cwd: run.cwd,
 				agentDir: deps.agentDir,
 				model: run.model,
-				customTools: deps.childTools({ registry: deps.registry, self: { runId: run.runId, name: run.name } }),
+				customTools: deps.childTools({ registry: deps.registry, self: { sessionId: run.sessionId, name: run.name } }),
 				...(run.definition.inheritConversation && spawnContext.parentEntries !== undefined
 					? { forkEntries: spawnContext.parentEntries() }
 					: {}),
+				...(run.definition.inheritConversation && spawnContext.parentEntryId !== undefined
+					? { forkEntryId: spawnContext.parentEntryId }
+					: {}),
 				...(deps.sessionDir === undefined ? {} : { sessionDir: deps.sessionDir }),
 				...(spawnContext.parentSessionFile === undefined ? {} : { parentSessionFile: spawnContext.parentSessionFile }),
-				...(run.resume === undefined ? {} : { resumeSessionFile: run.resume.sessionFile }),
+				...(run.resume === undefined
+					? {}
+					: { resume: { sessionFile: run.resume.sessionFile, entryId: run.resume.entryId } }),
 			});
 			const handle: RunHandle = {
-				runId: run.runId,
+				sessionId: run.sessionId,
 				name: run.name,
 				agent: run.definition.name,
 				model: modelName(run.model),
@@ -298,7 +313,7 @@ async function startRuns(
 	);
 	const failure = outcomes.find((outcome) => outcome.status === "rejected");
 	if (failure === undefined) return started;
-	for (const { handle } of started) deps.registry.remove(handle.runId);
+	for (const { handle } of started) deps.registry.remove(handle.sessionId);
 	await disposeAll(started);
 	throw failure.reason;
 }
@@ -334,7 +349,7 @@ function runProgress(entry: StartedRun): RunProgress {
 	return {
 		name: entry.handle.name,
 		agent: entry.handle.agent,
-		run_id: entry.handle.runId,
+		session_id: entry.handle.sessionId,
 		model: entry.handle.model,
 		activity: snapshot.activity,
 		...(snapshot.preview === undefined ? {} : { preview: snapshot.preview }),
@@ -362,7 +377,7 @@ function withInducedErrors(result: SpawnResult, errors: readonly string[]): Spaw
 /**
  * Display labels for one spawn call: the task's `name`, or the agent name when
  * the call runs that agent once, `agent-1`, `agent-2`, ... when it repeats.
- * Labels are for reading; run ids stay the only addressing key.
+ * Labels are for reading; session ids stay the only addressing key.
  */
 export function displayNames(tasks: readonly SpawnTask[]): string[] {
 	const counts = new Map<string, number>();
@@ -389,25 +404,58 @@ function planRun(task: SpawnTask, name: string, defaultCwd: string, deps: SpawnD
 	});
 	if (resolution.model === undefined) throw new Error(`agent '${task.agent}': ${resolution.error}`);
 	const cwd = task.cwd ?? defaultCwd;
-	const resume = task.resume_run_id === undefined ? undefined : resolveResume(task.resume_run_id, cwd, deps);
+	const resume = resolveResume(task, cwd, deps);
 	return {
 		task,
 		definition,
 		name,
 		model: resolution.model,
-		runId: deps.nextRunId(),
+		sessionId: resume?.sessionId ?? deps.nextSessionId(),
 		cwd,
 		...(resume === undefined ? {} : { resume }),
 	};
 }
 
-/** The stored transcript for a run id, or a pre-flight error naming the lookup rule. */
-function resolveResume(runId: string, cwd: string, deps: SpawnDependencies): { from: string; sessionFile: string } {
-	const sessionFile = deps.findRunSession(runId, cwd);
-	if (sessionFile !== undefined) return { from: runId, sessionFile };
-	throw new Error(
-		`unknown run id '${runId}' for cwd '${cwd}'. Resumed runs are found in ${deps.sessionDir ?? "(no session directory)"}`,
-	);
+/**
+ * The stored session and branch point a task resumes, or a pre-flight error.
+ * Both fields are required together, so a resume can never silently continue
+ * the abandoned tip of a branched transcript.
+ */
+function resolveResume(
+	task: SpawnTask,
+	cwd: string,
+	deps: SpawnDependencies,
+): { sessionId: string; entryId: string; sessionFile: string } | undefined {
+	const sessionId = task.resume_session_id;
+	const entryId = task.resume_entry_id;
+	if (sessionId === undefined && entryId === undefined) return undefined;
+	if (sessionId === undefined) throw new Error(bothResumeFieldsError("resume_session_id"));
+	if (entryId === undefined) throw new Error(bothResumeFieldsError("resume_entry_id"));
+	const sessionFile = deps.findRunSession(sessionId, cwd);
+	if (sessionFile === undefined) throw new Error(unknownSessionError(sessionId, cwd, deps));
+	if (!deps.sessionHasEntry(sessionFile, entryId)) {
+		throw new Error(`unknown entry '${entryId}' in session '${sessionId}'`);
+	}
+	return { sessionId, entryId, sessionFile };
+}
+
+function unknownSessionError(sessionId: string, cwd: string, deps: SpawnDependencies): string {
+	return `unknown session id '${sessionId}' for cwd '${cwd}'. Resumed sessions are found in ${
+		deps.sessionDir ?? "(no session directory)"
+	}`;
+}
+
+function bothResumeFieldsError(missing: string): string {
+	return `resume needs both resume_session_id and resume_entry_id (missing ${missing})`;
+}
+
+/** One live run per session: two tasks sharing a transcript would corrupt it with concurrent appends. */
+function assertDistinctSessions(planned: readonly PlannedRun[]): void {
+	const seen = new Set<string>();
+	for (const run of planned) {
+		if (seen.has(run.sessionId)) throw new Error(`duplicate session id '${run.sessionId}' in one spawn call`);
+		seen.add(run.sessionId);
+	}
 }
 
 function findDefinition(name: string, roots: readonly string[]): AgentDefinition {
@@ -466,9 +514,8 @@ async function runOne(started: StartedRun): Promise<SpawnResult> {
 	const identity = {
 		name: run.name,
 		agent: run.definition.name,
-		run_id: run.runId,
+		session_id: run.sessionId,
 		model: modelName(run.model),
-		...(run.resume === undefined ? {} : { resumed_from: run.resume.from }),
 	};
 	try {
 		await handle.channel.prompt(`${briefing}${run.task.task}`);
@@ -479,16 +526,17 @@ async function runOne(started: StartedRun): Promise<SpawnResult> {
 	}
 }
 
-/** Usage, elapsed time, context, and transcript path as of the given snapshot. */
+/** Usage, elapsed time, context, and transcript position as of the given snapshot. */
 function snapshotFields(
 	handle: RunHandle,
 	snapshot: ChannelSnapshot,
-): Pick<SpawnResult, "usage" | "context" | "elapsed_ms" | "session_file"> {
+): Pick<SpawnResult, "usage" | "context" | "elapsed_ms" | "session_file" | "entry_id"> {
 	return {
 		usage: subtractUsage(snapshot.usage, handle.usageBase),
 		elapsed_ms: runElapsed(handle, snapshot),
 		...(snapshot.context === undefined ? {} : { context: snapshot.context }),
 		...(snapshot.sessionFile === undefined ? {} : { session_file: snapshot.sessionFile }),
+		...(snapshot.entryId === undefined || snapshot.sessionFile === undefined ? {} : { entry_id: snapshot.entryId }),
 	};
 }
 
@@ -511,18 +559,19 @@ export function subtractUsage(current: RunUsage, base: RunUsage): RunUsage {
 /**
  * The peer list prepended to a run's task when it has siblings.
  *
- * Run ids only exist after the call has been planned, so this is the only way a
- * child can learn them; without it `target_run_id` would be unusable and two
- * runs of the same agent could not be told apart. Every line carries the same
- * keys the `message_agent` result uses: run id first, labels as annotations.
+ * Session ids only exist after the call has been planned, so this is the only
+ * way a child can learn them; without it `target_session_id` would be unusable
+ * and two runs of the same agent could not be told apart. Every line carries
+ * the same keys the `message_agent` result uses: session id first, labels as
+ * annotations.
  */
 export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]): string {
-	const siblings = handles.filter((handle) => handle.runId !== self.runId);
+	const siblings = handles.filter((handle) => handle.sessionId !== self.sessionId);
 	if (siblings.length === 0) return "";
 	const list = siblings
 		.map(
 			(handle) =>
-				`- target_run_id=${handle.runId} name=${JSON.stringify(handle.name)} agent=${JSON.stringify(handle.agent)}`,
+				`- target_session_id=${handle.sessionId} name=${JSON.stringify(handle.name)} agent=${JSON.stringify(handle.agent)}`,
 		)
 		.join("\n");
 	return `Siblings you can message with message_agent:\n${list}\n\n`;
@@ -579,20 +628,32 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 /**
  * Transcript storage for one run.
  *
- * A resumed run reopens the stored transcript. Otherwise, with a session
- * directory the transcript is persisted under the run id; forked context needs
- * the parent's session file so the forked history lands in the child's file.
- * Without a directory the run stays in memory.
+ * A resumed run reopens the stored transcript and moves the leaf to the
+ * recorded entry, so later turns become a sibling branch of the abandoned one
+ * instead of silently extending it. Otherwise, with a session directory the
+ * transcript is persisted under the session id; inherited context copies the
+ * parent's active branch (and ends it at the parent's leaf). Without a
+ * directory the run stays in memory.
  */
-function createSessionManager(input: CreateChannelInput): SessionManager {
-	if (input.resumeSessionFile !== undefined) {
-		return SessionManager.open(input.resumeSessionFile, input.sessionDir, input.cwd);
+export function createSessionManager(input: CreateChannelInput): SessionManager {
+	if (input.resume !== undefined) {
+		const manager = SessionManager.open(input.resume.sessionFile, input.sessionDir, input.cwd);
+		manager.branch(input.resume.entryId);
+		return manager;
 	}
-	if (input.sessionDir === undefined) return SessionManager.inMemory(input.cwd, undefined, input.forkEntries);
+	if (input.sessionDir === undefined) {
+		return SessionManager.inMemory(input.cwd, { id: input.sessionId }, input.forkEntries);
+	}
 	if (input.forkEntries !== undefined && input.parentSessionFile !== undefined) {
-		return SessionManager.forkFrom(input.parentSessionFile, input.cwd, input.sessionDir, { id: input.runId });
+		const manager = SessionManager.forkFrom(input.parentSessionFile, input.cwd, input.sessionDir, {
+			id: input.sessionId,
+		});
+		// forkFrom copies every entry and leaves the pointer on the last line, which
+		// may be an abandoned branch; the parent's leaf is the active branch.
+		if (input.forkEntryId !== undefined) manager.branch(input.forkEntryId);
+		return manager;
 	}
-	return SessionManager.create(input.cwd, input.sessionDir, { id: input.runId });
+	return SessionManager.create(input.cwd, input.sessionDir, { id: input.sessionId });
 }
 
 /** Restrict the child to the definition's tool list plus the injected tools. */
@@ -638,7 +699,6 @@ export function wrapSession(session: AgentSession): AgentChannel {
 		},
 		lastAssistantText: () => lastAssistantText(session.messages),
 		snapshot: () => {
-			const sessionFile = session.sessionFile;
 			const preview = state.preview();
 			const settledAt = state.settledAt();
 			const context = session.getContextUsage();
@@ -649,10 +709,21 @@ export function wrapSession(session: AgentSession): AgentChannel {
 				...(settledAt === undefined ? {} : { settledAt }),
 				usage: usageFromStats(session.getSessionStats()),
 				...(context === undefined ? {} : { context }),
-				...(sessionFile === undefined ? {} : { sessionFile }),
+				...sessionLocation(session),
 				...(outcome === undefined ? {} : { outcome }),
 			};
 		},
+	};
+}
+
+/** Where the run is persisted and where in that transcript it currently is; both absent in memory. */
+function sessionLocation(session: AgentSession): Pick<ChannelSnapshot, "sessionFile" | "entryId"> {
+	const sessionFile = session.sessionFile;
+	if (sessionFile === undefined) return {};
+	const entryId = session.sessionManager.getLeafId() ?? undefined;
+	return {
+		sessionFile,
+		...(entryId === undefined ? {} : { entryId }),
 	};
 }
 

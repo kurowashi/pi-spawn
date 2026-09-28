@@ -33,7 +33,7 @@ export interface AgentDefinition {
 
 /** Who sent a sibling message: the addressing key and the display label. */
 export interface MessageSender {
-	runId: string;
+	sessionId: string;
 	name: string;
 }
 
@@ -45,8 +45,10 @@ export interface SpawnTask {
 	name?: string;
 	model?: string;
 	cwd?: string;
-	/** Run id of a persisted run to continue instead of starting fresh. */
-	resume_run_id?: string;
+	/** Persisted session to continue instead of starting fresh. */
+	resume_session_id?: string;
+	/** Entry in that session to continue from; required together with resume_session_id. */
+	resume_entry_id?: string;
 }
 
 /** Token and cost totals billed to one run. The SDK's Usage, reduced to the fields a child reports. */
@@ -75,6 +77,8 @@ export interface ChannelSnapshot {
 	context?: ContextUsage;
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
+	/** Current position in the transcript, when the session has entries. */
+	entryId?: string;
 	/** How the last assistant message ended; absent before the first message completes. */
 	outcome?: { stopReason: string; errorMessage?: string };
 }
@@ -84,7 +88,7 @@ export interface RunProgress {
 	/** Display label: the task's `name`, or the agent name with a number when the call repeats an agent. */
 	name: string;
 	agent: string;
-	run_id: string;
+	session_id: string;
 	model: string;
 	activity: string;
 	/** Last streamed content line, when the run has written text. */
@@ -100,7 +104,8 @@ export interface SpawnResult {
 	/** Display label: the task's `name`, or the agent name with a number when the call repeats an agent. */
 	name: string;
 	agent: string;
-	run_id: string;
+	/** Persisted child session; stable across resumes. */
+	session_id: string;
 	model: string;
 	output?: string;
 	error?: string;
@@ -112,10 +117,10 @@ export interface SpawnResult {
 	usage?: RunUsage;
 	/** Current context window usage at the end of the run. */
 	context?: ContextUsage;
-	/** Present when the run continued a previous run's transcript. */
-	resumed_from?: string;
 	/** Persisted child transcript, when the run was file-backed. */
 	session_file?: string;
+	/** Where the run ended in the transcript; pass it with session_id to resume. */
+	entry_id?: string;
 }
 
 /**
@@ -148,7 +153,8 @@ export interface AgentChannel {
 
 /** A live child session plus its addressing keys. */
 export interface RunHandle {
-	runId: string;
+	/** Persisted session id; the only live address and the resume key. */
+	sessionId: string;
 	/** Display label shown in progress, results, and the /spawn command. */
 	name: string;
 	agent: string;

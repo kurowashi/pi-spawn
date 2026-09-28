@@ -23,8 +23,8 @@ import type { AgentChannel, RunProgress, SpawnResult } from "../../src/types.ts"
 
 interface FakeRun {
 	channel: AgentChannel;
-	/** The run id the call assigned; the only address siblings accept. */
-	runId: string;
+	/** The session id the call assigned; the only address siblings accept. */
+	sessionId: string;
 	/** Messages delivered while the run was streaming. */
 	steered: string[];
 	/** Messages delivered while the run was idle, each starting a turn. */
@@ -54,6 +54,8 @@ interface FakeRun {
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
+	/** Current position in the transcript, when the run is file-backed. */
+	entryId?: string;
 	/**
 	 * Resolves when the run is aborted. Pi resolves an aborted prompt instead of
 	 * rejecting it, so the fake does the same; a result must be labelled by the
@@ -66,7 +68,7 @@ function createFakeRun(agent: string): FakeRun {
 	let abortPrompt: (() => void) | undefined;
 	let releaseDelivery: (() => void) | undefined;
 	const run: FakeRun = {
-		runId: "",
+		sessionId: "",
 		steered: [],
 		queued: [],
 		output: `${agent} finished`,
@@ -118,6 +120,7 @@ function createFakeRun(agent: string): FakeRun {
 			...(run.settledAt === undefined ? {} : { settledAt: run.settledAt }),
 			usage: run.usage,
 			...(run.sessionFile === undefined ? {} : { sessionFile: run.sessionFile }),
+			...(run.entryId === undefined ? {} : { entryId: run.entryId }),
 		}),
 	};
 	return run;
@@ -173,15 +176,16 @@ function makeHarness(
 		],
 		parentModel: { provider: "fixture", id: "parent" },
 		registry,
-		findRunSession: (runId) => (runId.startsWith("stored-") ? `/sessions/${runId}.jsonl` : undefined),
-		nextRunId: () => {
+		findRunSession: (sessionId) => (sessionId.startsWith("stored-") ? `/sessions/${sessionId}.jsonl` : undefined),
+		sessionHasEntry: (_sessionFile, entryId) => entryId.startsWith("entry-"),
+		nextSessionId: () => {
 			counter += 1;
 			return `run-${counter}`;
 		},
 		childTools: (input) => childTools(input),
 		createChannel: async (input) => {
 			const run = createFakeRun(input.agent.name);
-			run.runId = input.runId;
+			run.sessionId = input.sessionId;
 			run.channel.prompt = async (text) => {
 				run.received.push(text);
 				if (run.failure !== undefined) throw new Error(run.failure);
@@ -217,7 +221,7 @@ test("a message starts a turn on an idle sibling", async () => {
 		assert.ok(writer, "the sibling channel exists before any prompt runs");
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool, "the child receives the message tool");
-		await callTool(tool, { target_run_id: writer.runId, text: "is the draft ready?" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "is the draft ready?" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -229,7 +233,7 @@ test("a message starts a turn on an idle sibling", async () => {
 	assert.equal(results[0]?.error, undefined);
 	assert.deepEqual(
 		harness.runs.get("writer")?.queued,
-		['message_agent from_run_id=run-1 name="reviewer"\n\nis the draft ready?'],
+		['message_agent from_session_id=run-1 name="reviewer"\n\nis the draft ready?'],
 		"an idle sibling gets a new turn, tagged with the sender",
 	);
 	assert.deepEqual(harness.runs.get("writer")?.steered, []);
@@ -243,12 +247,14 @@ test("a streaming sibling is interrupted instead of queued", async () => {
 		writer.streaming = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { target_run_id: writer.runId, text: "ping" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "ping" });
 	});
 
 	await spawn(harness, BOTH_TASKS);
 
-	assert.deepEqual(harness.runs.get("writer")?.steered, ['message_agent from_run_id=run-1 name="reviewer"\n\nping']);
+	assert.deepEqual(harness.runs.get("writer")?.steered, [
+		'message_agent from_session_id=run-1 name="reviewer"\n\nping',
+	]);
 	assert.deepEqual(harness.runs.get("writer")?.queued, []);
 });
 
@@ -260,7 +266,7 @@ test("a turn a message started is waited for before the call returns", async () 
 		writer.holdDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "extra work" });
 		// Release on a later macrotask; the call must still be waiting when it runs.
 		setTimeout(() => writer.releaseDelivery(), 0);
 	});
@@ -284,7 +290,7 @@ test("a run's result is its latest utterance, not its first", async () => {
 		};
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { target_run_id: writer.runId, text: "final question" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "final question" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -300,7 +306,7 @@ test("a failed induced turn is reported on the run it happened in", async () => 
 		writer.failDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -316,11 +322,11 @@ test("an agent name is refused and a run id resolves it", async () => {
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		try {
-			await callTool(tool, { target_run_id: "writer", text: "which one?" });
+			await callTool(tool, { target_session_id: "writer", text: "which one?" });
 		} catch (error) {
 			failures.push(error instanceof Error ? error.message : String(error));
 		}
-		const result = await callTool(tool, { target_run_id: "run-3", text: "you" });
+		const result = await callTool(tool, { target_session_id: "run-3", text: "you" });
 		assert.equal(textOf(result), "delivered");
 	});
 
@@ -334,7 +340,7 @@ test("an agent name is refused and a run id resolves it", async () => {
 	});
 
 	assert.equal(failures.length, 1, "the name is refused once");
-	assert.match(failures[0] ?? "", /no live run has target_run_id 'writer'/);
+	assert.match(failures[0] ?? "", /no live run has target_session_id 'writer'/);
 	assert.match(failures[0] ?? "", /run-3/);
 });
 
@@ -344,9 +350,12 @@ test("every run is told which siblings it can message", async () => {
 
 	assert.equal(
 		harness.runs.get("reviewer")?.received[0],
-		'Siblings you can message with message_agent:\n- target_run_id=run-2 name="writer" agent="writer"\n\nreview',
+		'Siblings you can message with message_agent:\n- target_session_id=run-2 name="writer" agent="writer"\n\nreview',
 	);
-	assert.match(harness.runs.get("writer")?.received[0] ?? "", /target_run_id=run-1 name="reviewer" agent="reviewer"/);
+	assert.match(
+		harness.runs.get("writer")?.received[0] ?? "",
+		/target_session_id=run-1 name="reviewer" agent="reviewer"/,
+	);
 });
 
 test("a lone run is not told about siblings", async () => {
@@ -371,16 +380,19 @@ test("inheritConversation forks the parent transcript; the default does not", as
 			reads += 1;
 			return entries;
 		},
+		parentEntryId: "entry-7",
 		parentSessionFile: "/sessions/parent.jsonl",
 	};
 
 	await spawnAgents({ tasks: [{ agent: "inheritor", task: "x" }] }, context, harness.deps);
 	assert.deepEqual(harness.inputs[0]?.forkEntries, entries);
+	assert.equal(harness.inputs[0]?.forkEntryId, "entry-7", "the copied transcript ends at the parent's active leaf");
 	assert.equal(harness.inputs[0]?.parentSessionFile, "/sessions/parent.jsonl");
 	assert.equal(reads, 1, "the parent transcript is read only for a definition that inherits it");
 
 	await spawnAgents({ tasks: [{ agent: "writer", task: "x" }] }, context, harness.deps);
 	assert.equal(harness.inputs[1]?.forkEntries, undefined);
+	assert.equal(harness.inputs[1]?.forkEntryId, undefined);
 	assert.equal(reads, 1, "a definition without the flag never reads the parent transcript");
 });
 
@@ -551,7 +563,7 @@ test("usage from a sibling-induced turn is included in the final result", async 
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		writer.usage = { input: 99, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 };
-		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
+		await callTool(tool, { target_session_id: writer.sessionId, text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -559,21 +571,75 @@ test("usage from a sibling-induced turn is included in the final result", async 
 	assert.equal(results[1]?.usage?.input, 99, "the induced turn's billing is counted");
 });
 
-test("a resumed task continues the stored transcript", async () => {
-	const harness = makeHarness(DEFINITIONS, async () => {});
+test("a resumed task continues the stored transcript at the recorded entry", async () => {
+	const harness = makeHarness(DEFINITIONS, async (_input, run) => {
+		run.sessionFile = "/sessions/stored-1.jsonl";
+		run.entryId = "entry-9";
+	});
 	const results = await spawn(harness, {
-		tasks: [{ agent: "writer", task: "continue", resume_run_id: "stored-1" }],
+		tasks: [
+			{
+				agent: "writer",
+				task: "continue",
+				resume_session_id: "stored-1",
+				resume_entry_id: "entry-1",
+			},
+		],
 	});
 
-	assert.equal(harness.inputs[0]?.resumeSessionFile, "/sessions/stored-1.jsonl");
-	assert.equal(results[0]?.resumed_from, "stored-1");
+	assert.deepEqual(harness.inputs[0]?.resume, { sessionFile: "/sessions/stored-1.jsonl", entryId: "entry-1" });
+	assert.equal(results[0]?.session_id, "stored-1", "the stored session id is kept, so the result is addressable again");
+	assert.equal(results[0]?.entry_id, "entry-9", "the result carries the position the resumed run ended at");
 });
 
-test("an unknown run id fails the whole call before anything starts", async () => {
+test("an unknown session id fails the whole call before anything starts", async () => {
 	const harness = makeHarness(DEFINITIONS, async () => {});
 	await assert.rejects(
-		() => spawn(harness, { tasks: [{ agent: "writer", task: "continue", resume_run_id: "ghost" }] }),
-		/unknown run id 'ghost'/,
+		() =>
+			spawn(harness, {
+				tasks: [{ agent: "writer", task: "continue", resume_session_id: "ghost", resume_entry_id: "entry-1" }],
+			}),
+		/unknown session id 'ghost'/,
+	);
+	assert.equal(harness.runs.size, 0);
+});
+
+test("an unknown entry fails the whole call before anything starts", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	await assert.rejects(
+		() =>
+			spawn(harness, {
+				tasks: [{ agent: "writer", task: "continue", resume_session_id: "stored-1", resume_entry_id: "gone" }],
+			}),
+		/unknown entry 'gone' in session 'stored-1'/,
+	);
+	assert.equal(harness.runs.size, 0);
+});
+
+test("half a resume pair is refused, never defaulted to the transcript tip", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	await assert.rejects(
+		() => spawn(harness, { tasks: [{ agent: "writer", task: "continue", resume_session_id: "stored-1" }] }),
+		/resume needs both resume_session_id and resume_entry_id/,
+	);
+	await assert.rejects(
+		() => spawn(harness, { tasks: [{ agent: "writer", task: "continue", resume_entry_id: "entry-1" }] }),
+		/resume needs both resume_session_id and resume_entry_id/,
+	);
+	assert.equal(harness.runs.size, 0);
+});
+
+test("two tasks cannot share one stored session", async () => {
+	const harness = makeHarness(DEFINITIONS, async () => {});
+	await assert.rejects(
+		() =>
+			spawn(harness, {
+				tasks: [
+					{ agent: "writer", task: "a", resume_session_id: "stored-1", resume_entry_id: "entry-1" },
+					{ agent: "reviewer", task: "b", resume_session_id: "stored-1", resume_entry_id: "entry-2" },
+				],
+			}),
+		/duplicate session id 'stored-1'/,
 	);
 	assert.equal(harness.runs.size, 0);
 });
@@ -594,7 +660,14 @@ test("a resumed run reports only the usage billed after it resumed", async () =>
 	};
 
 	const results = await spawn(harness, {
-		tasks: [{ agent: "writer", task: "continue", resume_run_id: "stored-1" }],
+		tasks: [
+			{
+				agent: "writer",
+				task: "continue",
+				resume_session_id: "stored-1",
+				resume_entry_id: "entry-1",
+			},
+		],
 	});
 
 	assert.deepEqual(results[0]?.usage, added);

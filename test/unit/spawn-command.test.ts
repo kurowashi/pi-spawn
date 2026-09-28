@@ -13,9 +13,9 @@ import { createRunRegistry } from "../../src/registry.ts";
 import { describeRun, runSpawnCommand, spawnTarget, statusOf } from "../../src/tools/spawn-command.ts";
 import type { AgentChannel, RunHandle } from "../../src/types.ts";
 
-function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
+function handle(sessionId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
 	return {
-		runId,
+		sessionId,
 		name: agent,
 		agent,
 		model: "fixture/model",
@@ -94,8 +94,8 @@ test("an unknown target is refused with the live runs listed", async () => {
 	await runSpawnCommand("ghost", ctx, registry);
 
 	assert.equal(notified[0]?.type, "error");
-	assert.match(notified[0]?.message ?? "", /no live run has target_run_id 'ghost'/);
-	assert.match(notified[0]?.message ?? "", /Live run_ids: run-1/);
+	assert.match(notified[0]?.message ?? "", /no live run has target_session_id 'ghost'/);
+	assert.match(notified[0]?.message ?? "", /Live session_ids: run-1/);
 });
 
 test("/spawn logs <run> summarises the run outside the terminal UI", async () => {
@@ -109,7 +109,7 @@ test("/spawn logs <run> summarises the run outside the terminal UI", async () =>
 	assert.equal(notified[0]?.type, "info");
 });
 
-test("an agent name is refused; the run id addresses the run", async () => {
+test("an agent name is refused; the session id addresses the run", async () => {
 	const registry = createRunRegistry();
 	registry.add(handle("run-1", "reviewer"));
 	registry.add(handle("run-2", "writer"));
@@ -118,8 +118,8 @@ test("an agent name is refused; the run id addresses the run", async () => {
 	await runSpawnCommand("writer", ctx, registry);
 
 	assert.equal(notified[0]?.type, "error");
-	assert.match(notified[0]?.message ?? "", /no live run has target_run_id 'writer'/);
-	assert.match(notified[0]?.message ?? "", /Live run_ids: run-1, run-2/);
+	assert.match(notified[0]?.message ?? "", /no live run has target_session_id 'writer'/);
+	assert.match(notified[0]?.message ?? "", /Live session_ids: run-1, run-2/);
 
 	await runSpawnCommand("run-2", ctx, registry);
 

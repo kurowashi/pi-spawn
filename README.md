@@ -30,6 +30,7 @@ Pi から子エージェントを並列に起動し、
 - 委譲の深さは既定で 1 です。子を起動できるのは、定義に `extensions: true` を書いた子だけです
 - 子の作業ディレクトリは既定で親と同じです
 - 子の会話文脈は既定で空です。定義に `inheritConversation: true` を書いたときだけ親の会話をコピーします
+- 子は永続する session id で識別します。再開は session id と entry id の組で位置を指定します
 - 子セッションは `~/.pi/agent/spawn-sessions/` に保存されます
 
 ## 前提条件
@@ -129,7 +130,7 @@ description: ドキュメントのレビュー役
 
 ```text
 spawn_agents({
-  tasks: [{ agent, task, model?, cwd?, resume_run_id? }, ...]
+  tasks: [{ agent, task, model?, cwd?, resume_session_id?, resume_entry_id? }, ...]
 })
 ```
 
@@ -141,7 +142,11 @@ spawn_agents({
 | `tasks[].name` | | agent 名(重複時は連番) | 表示用の短い名前 |
 | `tasks[].model` | | 定義の `model` | 使用モデルの上書き(`provider/id`) |
 | `tasks[].cwd` | | 親と同じ | 子の作業ディレクトリ |
-| `tasks[].resume_run_id` | | — | 再開する run の id |
+| `tasks[].resume_session_id` | | — | 再開する子セッションの id |
+| `tasks[].resume_entry_id` | | — | そのセッション内の再開位置(entry id)。`resume_session_id` と必ずセット |
+
+`resume_session_id` と `resume_entry_id` は、以前の結果の `session_id` と `entry_id` をそのまま渡します。
+2つは必ずセットで、片方だけではエラーになります。
 
 `tasks[].name` は表示用の名前です。同じ agent を複数の役割で使うときの区別に使います。
 未指定時は agent 名、同じ agent を複数起動したときは `writer-1` のように連番になります。
@@ -174,7 +179,7 @@ spawn_agents({
 
 子1体につき1行で、次の順に表示します。
 
-- 表示名(`tasks[].name`。規則は引数表を参照)と `run_id=<id>`
+- 表示名(`tasks[].name`。規則は引数表を参照)と `session_id=<id>`
 - 最新活動(`thinking` / `writing` / `tool: bash` など。ターンが終わった子は `done`)
 - 起動からの経過時間(`done` の子は完了時点で停止)
 - 使用モデル、コンテキスト使用量(`ctx 12.3k/200k (6%)`)、コスト(0ドルのときは省略)
@@ -192,7 +197,7 @@ spawn_agents({
 | `/spawn` | 実行中 run の一覧から1件選び、ログを開きます |
 | `/spawn <target>` / `/spawn logs <target>` | target の run のログを開きます |
 
-target は run id だけです。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
+target は session id だけです。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
 
 ### ログビュー
 
@@ -235,12 +240,12 @@ spawn_agents({
 ```
 
 ```text
-message_agent({ target_run_id, text })
+message_agent({ target_session_id, text })
 ```
 
 | 引数 | 必須 | 意味 |
 |---|---|---|
-| `target_run_id` | ○ | 宛先の run id。タスク先頭の宛先一覧に載っています |
+| `target_session_id` | ○ | 宛先の session id。タスク先頭の宛先一覧に載っています |
 | `text` | ○ | 送る本文 |
 
 ### 配送とターン
@@ -253,14 +258,14 @@ message_agent({ target_run_id, text })
 
 ### 宛先の指定
 
-宛先は run id だけです。agent 名や `agent (run id)` のような表示形式は受け付けません。
+宛先は session id だけです。agent 名や `agent (session id)` のような表示形式は受け付けません。
 
-- run id: 呼び出しごとに決まる子の識別子(8桁)。結果の見出し `[name] run_id=<id> (model)` に載ります
-- 兄弟がいる子のタスク先頭には、宛先一覧が `target_run_id=` / `name=` / `agent=` の形で自動で付きます
+- session id: 子セッションの永続 id(8桁)。結果の見出し `[name] session_id=<id> entry_id=<id> (model)` に載ります
+- 兄弟がいる子のタスク先頭には、宛先一覧が `target_session_id=` / `name=` / `agent=` の形で自動で付きます
 
 ```text
 Siblings you can message with message_agent:
-- target_run_id=a1b2c3d4 name="review-1" agent="reviewer"
+- target_session_id=a1b2c3d4 name="review-1" agent="reviewer"
 ```
 
 ### 受信側が見るメッセージ
@@ -268,12 +273,12 @@ Siblings you can message with message_agent:
 受け取った子には、送信元を明示したヘッダー付きで届きます。
 
 ```text
-message_agent from_run_id=a1b2c3d4 name="review-1"
+message_agent from_session_id=a1b2c3d4 name="review-1"
 
 本文
 ```
 
-返信するときは、この `from_run_id` を `target_run_id` に渡します。
+返信するときは、この `from_session_id` を `target_session_id` に渡します。
 
 ## 実行結果
 
@@ -283,9 +288,9 @@ message_agent from_run_id=a1b2c3d4 name="review-1"
 |---|---|
 | `name` | 表示名(`tasks[].name` と同じ規則) |
 | `agent` | 定義名 |
-| `run_id` | run の識別子。`resume_run_id` に渡すと再開できます |
+| `session_id` | 子セッションの id。`resume_session_id` に渡すと再開できます |
 | `model` | 実際に使われたモデル |
-| `resumed_from` | 再開元の run id(再開した run だけ) |
+| `entry_id` | この run が終わった位置。`resume_entry_id` に渡すとここから再開できます |
 | `output` | 最後の発話。メッセージで始まったターンの発話も含みます |
 | `error` | 失敗した run だけに入ります。このとき `output` はありません |
 | `usage` | 子のトークンとコスト。親セッションの統計にも加算されます |
@@ -298,7 +303,7 @@ message_agent from_run_id=a1b2c3d4 name="review-1"
 - 未知の agent や解決できない `model` は、何も起動せずにエラーになります
 - 呼び出し全体の制限時間は `spawn.json` で設定します(既定60分、`0` で無制限)。
   過ぎたら全子を中断し、各 run は `ERROR:` と理由(`timed out after 60m00s` など)になります
-- 結果の見出し `[name] run_id=<id> (model)` と `output` はモデルにも渡ります。
+- 結果の見出し `[name] session_id=<id> entry_id=<id> (model)` と `output` はモデルにも渡ります。
   失敗した run は `ERROR: <error>` が渡ります
 - `usage`・`context`・`elapsed_ms`・`session_file` はツール結果の `details` にだけ入り、モデルには渡りません
 
@@ -329,15 +334,27 @@ message_agent from_run_id=a1b2c3d4 name="review-1"
 子の定義に `inheritConversation: true` を書くと、親の会話をコピーした状態から子を始めます。
 既定は false(空の文脈)です。
 
-### run を再開する
+### セッションを再開する
 
-`tasks[].resume_run_id` に以前の run id を渡すと、その子セッションを読み直し、
-同じ文脈の続きとして `task` を実行します。
+`tasks[].resume_session_id` と `tasks[].resume_entry_id` に、以前の結果の `session_id` と `entry_id` をそのまま渡すと、
+その子セッションを読み直し、指定した entry の履歴を文脈として `task` を実行します。
 
+再開は指定した entry から新しい枝を作ります。指定した entry より後にある既存の枝は引き継ぎません。
+
+```text
+entry_id を指定
+   ├─ 以前の枝: そのまま残る
+   └─ resume 後: 新しい枝として追加
+```
+
+- 2つは必ずセットで指定します。片方だけではエラーになります
 - `agent` / `model` / `cwd` は今回の指定が使われます
-- run は起動時の `cwd` で探索するため、
-  別の `cwd` で起動した run を再開するときは同じ `cwd` を渡します
-- 再開できるのは run id をセッション id として保存した run だけです
+- セッションは起動時の `cwd` で探索するため、
+  別の `cwd` で起動したセッションを再開するときは同じ `cwd` を渡します
+- 親を `/tree` で戻した後に古い結果の組で再開しても、破棄した枝の続きは混ざりません
+- 同じセッションを1回の呼び出しの複数タスクで再開することはできません(セッションへの同時書き込みになるため、事前エラーになります)
+- 再開できるのは、`~/.pi/agent/spawn-sessions/` に保存され、
+  指定した `resume_entry_id` が存在し、今回の `cwd` で探索できる子セッションだけです
 
 ### 子にさらに委譲する(多段委譲)
 

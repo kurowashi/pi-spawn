@@ -1,6 +1,6 @@
 # ADR 0001: run id を子セッション id にして resume を可能にする
 
-- 状態: 採用
+- 状態: 廃止 (2026-09-28 [ADR 0009](0009-resume-address-pair.md) で置き換え)
 - 日付: 2026-09-26
 - 対象: `spawn_agents` の `tasks[].resume_run_id`
 

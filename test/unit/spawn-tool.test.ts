@@ -20,6 +20,7 @@ import {
 	formatProgress,
 	formatResults,
 	formatResultText,
+	hasSessionEntry,
 	progressResult,
 	spawnContext,
 	spawnRequest,
@@ -39,14 +40,14 @@ const identityTheme = {
 };
 
 function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-	return { name: "writer", agent: "writer", run_id: "run-1", model: "fixture/model", ...overrides };
+	return { name: "writer", agent: "writer", session_id: "run-1", model: "fixture/model", ...overrides };
 }
 
 function progress(overrides: Partial<RunProgress> = {}): RunProgress {
 	return {
 		name: "writer",
 		agent: "writer",
-		run_id: "run-1",
+		session_id: "run-1",
 		model: "fixture/model",
 		activity: "tool: bash",
 		elapsed_ms: 1000,
@@ -56,7 +57,7 @@ function progress(overrides: Partial<RunProgress> = {}): RunProgress {
 }
 
 test("sums the usage of every run", () => {
-	const totals = totalUsage([result({ usage: USAGE }), result({ run_id: "run-2", usage: USAGE })]);
+	const totals = totalUsage([result({ usage: USAGE }), result({ session_id: "run-2", usage: USAGE })]);
 	assert.deepEqual(totals, {
 		input: 20,
 		output: 40,
@@ -83,11 +84,11 @@ test("a run billed only for cache writes still reports usage", () => {
 test("progress lines show each run, its activity, the elapsed time, and the model", () => {
 	const lines = formatProgress([
 		progress(),
-		progress({ name: "reviewer", agent: "reviewer", run_id: "run-2", activity: "writing", elapsed_ms: 130_000 }),
+		progress({ name: "reviewer", agent: "reviewer", session_id: "run-2", activity: "writing", elapsed_ms: 130_000 }),
 	]);
 	assert.equal(
 		lines,
-		"[writer] run_id=run-1 — tool: bash (1s) · fixture/model\n[reviewer] run_id=run-2 — writing (2m10s) · fixture/model",
+		"[writer] session_id=run-1 — tool: bash (1s) · fixture/model\n[reviewer] session_id=run-2 — writing (2m10s) · fixture/model",
 	);
 });
 
@@ -98,18 +99,18 @@ test("a progress line shows context usage and cost when the run reports them", (
 			usage: { ...USAGE, cost: 0.0312 },
 		}),
 	]);
-	assert.equal(lines, "[writer] run_id=run-1 — tool: bash (1s) · fixture/model · ctx 12.3k/200k (6%) · $0.03");
+	assert.equal(lines, "[writer] session_id=run-1 — tool: bash (1s) · fixture/model · ctx 12.3k/200k (6%) · $0.03");
 });
 
 test("a progress line carries the latest content line when there is one", () => {
 	const lines = formatProgress([
 		progress({ preview: "checking the README" }),
-		progress({ name: "reviewer", agent: "reviewer", run_id: "run-2", elapsed_ms: 2000 }),
+		progress({ name: "reviewer", agent: "reviewer", session_id: "run-2", elapsed_ms: 2000 }),
 	]);
 	assert.equal(
 		lines,
-		"[writer] run_id=run-1 — tool: bash (1s) · fixture/model · checking the README\n" +
-			"[reviewer] run_id=run-2 — tool: bash (2s) · fixture/model",
+		"[writer] session_id=run-1 — tool: bash (1s) · fixture/model · checking the README\n" +
+			"[reviewer] session_id=run-2 — tool: bash (2s) · fixture/model",
 	);
 });
 
@@ -121,6 +122,7 @@ test("a final result block carries the stats the model does not see", () => {
 				elapsed_ms: 34_000,
 				usage: { ...USAGE, cost: 0.25 },
 				context: { tokens: 45_000, contextWindow: 200_000, percent: 22.5 },
+				entry_id: "entry-9",
 				session_file: "/spawn-sessions/run-1.jsonl",
 			}),
 		],
@@ -129,8 +131,8 @@ test("a final result block carries the stats the model does not see", () => {
 	);
 	assert.equal(
 		text,
-		"[writer] run_id=run-1 (fixture/model) — 34s\nfirst\nsecond\n" +
-			"10 in / 20 out / 5 cache · $0.25 · ctx 45k/200k (23%) · session /spawn-sessions/run-1.jsonl",
+		"[writer] session_id=run-1 (fixture/model) — 34s\nfirst\nsecond\n" +
+			"10 in / 20 out / 5 cache · $0.25 · ctx 45k/200k (23%) · entry entry-9 · session /spawn-sessions/run-1.jsonl",
 	);
 });
 
@@ -161,7 +163,7 @@ test("a progress result reuses the final details shape", () => {
 		{
 			name: "writer",
 			agent: "writer",
-			run_id: "run-1",
+			session_id: "run-1",
 			model: "fixture/model",
 			progress: { activity: "tool: bash", elapsed_ms: 1000 },
 			usage: FREE_USAGE,
@@ -191,19 +193,29 @@ test("a zero timeout means no deadline and stays out of the request", () => {
 	});
 });
 
-test("the spawn context carries a lazy parent transcript reader", () => {
-	const entries = [{ type: "message" }];
+test("the spawn context carries a lazy reader of the parent's active branch", () => {
+	const entries = [{ type: "message", id: "entry-1" }];
 	const controller = new AbortController();
 	const ctx = {
 		cwd: "/work",
-		sessionManager: { getEntries: () => entries, getSessionFile: () => "/sessions/parent.jsonl" },
+		sessionManager: {
+			getBranch: () => entries,
+			getLeafId: () => "entry-1",
+			getSessionFile: () => "/sessions/parent.jsonl",
+		},
 	} as unknown as ExtensionContext;
 
 	const context = spawnContext(ctx, controller.signal, undefined);
 
 	assert.deepEqual(
 		{ ...context, parentEntries: undefined },
-		{ cwd: "/work", signal: controller.signal, parentSessionFile: "/sessions/parent.jsonl", parentEntries: undefined },
+		{
+			cwd: "/work",
+			signal: controller.signal,
+			parentEntryId: "entry-1",
+			parentSessionFile: "/sessions/parent.jsonl",
+			parentEntries: undefined,
+		},
 	);
 	assert.deepEqual(context.parentEntries?.(), entries);
 });
@@ -212,7 +224,7 @@ test("the spawn context streams progress through the tool update callback", () =
 	const updates: unknown[] = [];
 	const ctx = {
 		cwd: "/work",
-		sessionManager: { getEntries: () => [], getSessionFile: () => undefined },
+		sessionManager: { getBranch: () => [], getLeafId: () => null, getSessionFile: () => undefined },
 	} as unknown as ExtensionContext;
 	const context = spawnContext(ctx, undefined, (result) => void updates.push(result));
 
@@ -222,8 +234,11 @@ test("the spawn context streams progress through the tool update callback", () =
 });
 
 test("the model-facing result keeps the header, output, and errors", () => {
-	assert.equal(formatResults([result({ output: "answer" })]), "[writer] run_id=run-1 (fixture/model)\nanswer");
-	assert.equal(formatResults([result({ error: "boom" })]), "[writer] run_id=run-1 (fixture/model)\nERROR: boom");
+	assert.equal(
+		formatResults([result({ output: "answer", entry_id: "entry-9" })]),
+		"[writer] session_id=run-1 entry_id=entry-9 (fixture/model)\nanswer",
+	);
+	assert.equal(formatResults([result({ error: "boom" })]), "[writer] session_id=run-1 (fixture/model)\nERROR: boom");
 });
 
 /** A flushed session needs one assistant message, matching Pi's own write policy. */
@@ -247,7 +262,7 @@ function assistantMessage(): Parameters<SessionManager["appendMessage"]>[0] {
 	};
 }
 
-test("findRunSession resolves the run id recorded as the session id", () => {
+test("findRunSession resolves the session id recorded in the header", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-spawn-lookup-"));
 	const cwd = process.cwd();
 	const manager = SessionManager.create(cwd, dir, { id: "deadbeef" });
@@ -257,6 +272,21 @@ test("findRunSession resolves the run id recorded as the session id", () => {
 		assert.equal(findRunSession(dir, cwd, "deadbeef"), manager.getSessionFile());
 		assert.equal(findRunSession(dir, join(cwd, "elsewhere"), "deadbeef"), undefined, "lookup is cwd-scoped");
 		assert.equal(findRunSession(dir, cwd, "cafebabe"), undefined);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("hasSessionEntry follows the stored entry ids", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-spawn-entry-"));
+	const manager = SessionManager.create(process.cwd(), dir, { id: "deadbeef" });
+	const entryId = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+	manager.appendMessage(assistantMessage());
+	const sessionFile = manager.getSessionFile();
+	assert.ok(sessionFile, "the fixture session is file-backed");
+	try {
+		assert.equal(hasSessionEntry(sessionFile, entryId), true);
+		assert.equal(hasSessionEntry(sessionFile, "cafebabe"), false);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -298,7 +328,7 @@ test("the result renderer shows the live line while running and the stats block 
 		{} as never,
 	);
 	const text = done?.render(80).join("\n") ?? "";
-	assert.ok(text.includes("[writer] run_id=run-1"));
+	assert.ok(text.includes("[writer] session_id=run-1"));
 	assert.ok(text.includes("$0.25"));
 	assert.ok(!text.includes("model-facing"), "the model-facing text is not the UI view");
 });

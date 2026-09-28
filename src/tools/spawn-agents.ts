@@ -47,7 +47,8 @@ const Task = Type.Object(
 		name: Type.Optional(Type.String({ description: "Short label for this run, shown in progress and results" })),
 		model: Type.Optional(Type.String({ description: "Override model: provider/id" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for that agent" })),
-		resume_run_id: Type.Optional(Type.String({ description: "Continue a previous run id" })),
+		resume_session_id: Type.Optional(Type.String({ description: "Continue a stored session id" })),
+		resume_entry_id: Type.Optional(Type.String({ description: "Entry id to continue from in that session" })),
 	},
 	{ additionalProperties: false },
 );
@@ -63,7 +64,7 @@ export interface SpawnToolOptions {
 	registry: RunRegistry;
 	/** Injected so tests can run the whole flow without the SDK. */
 	dependencies?: (context: { cwd: string; agentDir: string; projectTrusted: boolean }) => SpawnDependencies;
-	nextRunId?: () => string;
+	nextSessionId?: () => string;
 }
 
 export function createSpawnAgentsTool(options: SpawnToolOptions) {
@@ -118,18 +119,21 @@ export function spawnRequest(params: Static<typeof Parameters>, timeoutMs: numbe
 	};
 }
 
-/** The spawn context for this turn, including a lazy reader for the parent's transcript. */
+/** The spawn context for this turn, including a lazy reader for the parent's active branch. */
 export function spawnContext(
 	ctx: ExtensionContext,
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback<SpawnToolDetails> | undefined,
 ): SpawnContext {
 	const parentSessionFile = ctx.sessionManager.getSessionFile();
+	const parentEntryId = ctx.sessionManager.getLeafId() ?? undefined;
 	return {
 		cwd: ctx.cwd,
 		...(signal === undefined ? {} : { signal }),
 		// Read only when a definition sets inheritConversation; the closure keeps that cost off the common path.
-		parentEntries: () => [...ctx.sessionManager.getEntries()],
+		// The active branch, not every file entry: abandoned branches are alternative histories.
+		parentEntries: () => [...ctx.sessionManager.getBranch()],
+		...(parentEntryId === undefined ? {} : { parentEntryId }),
 		...(parentSessionFile === undefined ? {} : { parentSessionFile }),
 		...(onUpdate === undefined ? {} : { onProgress: (progress) => onUpdate(progressResult(progress)) }),
 	};
@@ -139,10 +143,16 @@ export function spawnContext(
 export function formatResults(results: readonly SpawnResult[]): string {
 	return results
 		.map((result) => {
-			const header = `[${result.name}] run_id=${result.run_id} (${result.model})`;
+			const header = `[${result.name}] ${sessionKey(result)} (${result.model})`;
 			return result.error === undefined ? `${header}\n${result.output ?? ""}` : `${header}\nERROR: ${result.error}`;
 		})
 		.join("\n\n");
+}
+
+/** The model-facing address of a result: session id plus the entry it ended at. */
+function sessionKey(result: SpawnResult): string {
+	const entry = result.entry_id === undefined ? "" : ` entry_id=${result.entry_id}`;
+	return `session_id=${result.session_id}${entry}`;
 }
 
 /** The tool's structured details: final results, or in-flight progress in the same shape. */
@@ -155,7 +165,7 @@ export function progressResult(progress: readonly RunProgress[]): AgentToolResul
 	const results: SpawnResult[] = progress.map((run) => ({
 		name: run.name,
 		agent: run.agent,
-		run_id: run.run_id,
+		session_id: run.session_id,
 		model: run.model,
 		progress: {
 			activity: run.activity,
@@ -172,7 +182,7 @@ export function progressResult(progress: readonly RunProgress[]): AgentToolResul
 export function formatProgress(progress: readonly RunProgress[]): string {
 	return progress
 		.map((run) => {
-			const line = `[${run.name}] run_id=${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})${statsSuffix(run)}`;
+			const line = `[${run.name}] session_id=${run.session_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})${statsSuffix(run)}`;
 			return run.preview === undefined ? line : `${line} \u00b7 ${run.preview}`;
 		})
 		.join("\n");
@@ -207,7 +217,7 @@ function renderToolText(
 
 function formatResultBlock(result: SpawnResult, expanded: boolean, theme: TextTheme): string {
 	const elapsed = result.elapsed_ms === undefined ? "" : ` \u2014 ${formatElapsed(result.elapsed_ms)}`;
-	const header = `${theme.fg("accent", `[${result.name}] run_id=${result.run_id}`)}${theme.fg("dim", ` (${result.model})${elapsed}`)}`;
+	const header = `${theme.fg("accent", `[${result.name}] session_id=${result.session_id}`)}${theme.fg("dim", ` (${result.model})${elapsed}`)}`;
 	const body = result.error === undefined ? excerpt(result.output ?? "", expanded) : `ERROR: ${result.error}`;
 	const meta = formatResultMeta(result, theme);
 	return [header, body, meta].filter((part) => part.length > 0).join("\n");
@@ -221,7 +231,7 @@ function excerpt(text: string, expanded: boolean): string {
 	return `${lines.slice(0, RESULT_PREVIEW_LINES).join("\n")}\n... (${hidden} more lines)`;
 }
 
-/** Tokens, cost, context, and transcript for one run. */
+/** Tokens, cost, context, transcript, and resume position for one run. */
 function formatResultMeta(result: SpawnResult, theme: TextTheme): string {
 	const parts: string[] = [];
 	if (result.usage !== undefined) {
@@ -233,7 +243,7 @@ function formatResultMeta(result: SpawnResult, theme: TextTheme): string {
 		if (result.usage.cost > 0) parts.push(formatCost(result.usage.cost));
 	}
 	if (result.context !== undefined) parts.push(contextText(result.context));
-	if (result.resumed_from !== undefined) parts.push(`resumed from ${result.resumed_from}`);
+	if (result.entry_id !== undefined) parts.push(`entry ${result.entry_id}`);
 	if (result.session_file !== undefined) parts.push(`session ${result.session_file}`);
 	return parts.length === 0 ? "" : theme.fg("dim", parts.join(" \u00b7 "));
 }
@@ -293,16 +303,22 @@ function buildDependencies(
 		parentModel: parent,
 		registry: options.registry,
 		sessionDir,
-		findRunSession: (runId, cwd) => findRunSession(sessionDir, cwd, runId),
-		nextRunId: options.nextRunId ?? (() => crypto.randomUUID().replaceAll("-", "").slice(0, 8)),
+		findRunSession: (sessionId, cwd) => findRunSession(sessionDir, cwd, sessionId),
+		sessionHasEntry: (sessionFile, entryId) => hasSessionEntry(sessionFile, entryId),
+		nextSessionId: options.nextSessionId ?? (() => crypto.randomUUID().replaceAll("-", "").slice(0, 8)),
 		createChannel: (input) => createChildChannel(input),
 		childTools: (input) => childTools(input),
 	};
 }
 
-/** Find a persisted child transcript by the run id used as its session id. */
-export function findRunSession(sessionDir: string, cwd: string, runId: string): string | undefined {
-	return SessionManager.findById(cwd, runId, sessionDir);
+/** Find a persisted child transcript by the session id its file is named after. */
+export function findRunSession(sessionDir: string, cwd: string, sessionId: string): string | undefined {
+	return SessionManager.findById(cwd, sessionId, sessionDir);
+}
+
+/** Whether a stored transcript contains the entry a resume would branch from. */
+export function hasSessionEntry(sessionFile: string, entryId: string): boolean {
+	return SessionManager.open(sessionFile).getEntry(entryId) !== undefined;
 }
 
 function isModelIdentity(value: unknown): value is { provider: string; id: string } {

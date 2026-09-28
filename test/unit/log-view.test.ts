@@ -42,7 +42,7 @@ function makeView(
 		{
 			name: "intro",
 			agent: "writer",
-			runId: "run-1",
+			sessionId: "run-1",
 			model: "fixture/model",
 			sessionFile: () => sessionFile,
 			status: () => ("status" in options ? options.status : STATUS),

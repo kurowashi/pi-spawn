@@ -26,13 +26,14 @@
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_DESCRIPTION_CHARS` |
 | トップレベル引数は 3 個以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_TOP_LEVEL_PARAMETERS` |
 | スキーマは `additionalProperties: false` | `test/contract/tool-surface.test.ts` | `src/tools/*.ts` |
-| 子ツールの引数は `target_run_id` と `text` だけ | `test/contract/tool-surface.test.ts` の `EXPECTED_PARAMETERS` | `src/tools/message-agent.ts` |
-| 宛先は run id の完全一致のみ | `test/unit/deliver.test.ts` + `test/unit/message-agent.test.ts` | `src/registry.ts` の `resolveTarget` |
-| 受信メッセージは `from_run_id` / `name` のヘッダーを持つ | `test/unit/deliver.test.ts` + `test/integration/spawn-agents.test.ts` | `src/deliver.ts` の `formatMessage` |
-| ブリーフィングは `target_run_id=` / `name=` / `agent=` の KV で示す | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `siblingBriefing` |
-| 解決エラーは live の run id だけを並べる | `test/unit/message-agent.test.ts` | `src/registry.ts` の `explainTarget` |
-| 結果見出しは `run_id=<id>` で示す | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `formatResults` |
+| 子ツールの引数は `target_session_id` と `text` だけ | `test/contract/tool-surface.test.ts` の `EXPECTED_PARAMETERS` | `src/tools/message-agent.ts` |
+| 宛先は session id の完全一致のみ | `test/unit/deliver.test.ts` + `test/unit/message-agent.test.ts` | `src/registry.ts` の `resolveTarget` |
+| 受信メッセージは `from_session_id` / `name` のヘッダーを持つ | `test/unit/deliver.test.ts` + `test/integration/spawn-agents.test.ts` | `src/deliver.ts` の `formatMessage` |
+| ブリーフィングは `target_session_id=` / `name=` / `agent=` の KV で示す | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `siblingBriefing` |
+| 解決エラーは live の session id だけを並べる | `test/unit/message-agent.test.ts` | `src/registry.ts` の `explainTarget` |
+| 結果見出しは `session_id=<id> entry_id=<id>` で示す | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `formatResults` |
 | 親履歴を継承し、読み出すのは定義の `inheritConversation: true` のときだけ | `test/unit/catalog.test.ts` + `test/integration/spawn-agents.test.ts` | `src/catalog.ts` の `parseAgent` + `src/spawn.ts` の `startRuns` |
+| 継承した会話は親の現在の枝で終わり、破棄した枝を含まない | `test/integration/spawn-agents.test.ts` | `src/tools/spawn-agents.ts` の `spawnContext` + `src/spawn.ts` の `createSessionManager` |
 | `spawn.json` の解決順はグローバル → trust 済み project。`0` は無制限 | `test/unit/config.test.ts` | `src/config.ts` |
 | 制限時間の既定は 3600000ms | `test/unit/config.test.ts` | `src/config.ts` の `DEFAULT_CONFIG` |
 | 解決した `timeoutMs` は spawn request に渡る | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `spawnRequest` |
@@ -46,7 +47,10 @@
 |---|---|---|
 | カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
 | 定義の解決順は project → user。project 定義は trust 済みのときだけ読む | `test/unit/catalog.test.ts` + `test/integration/spawn-agents.test.ts` | `src/catalog.ts` の `definitionRoots` / `discoverAgents` |
-| resume は永続化済みの run だけを対象にする(run id = セッション id) | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
+| resume は 2 フィールドの組で指定する(`resume_session_id` + `resume_entry_id`。両方必須) | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `resolveResume` |
+| resume の entry は保存済みセッションに存在する | `test/integration/spawn-agents.test.ts` + `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `hasSessionEntry` |
+| 再開した run は保存済みの session id を保ち、結果の組で再び再開できる | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `planRun` |
+| 同じセッションを1呼び出しの複数タスクに指定できない | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `assertDistinctSessions` |
 | resume の探索は `cwd` 一致で行う | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` |
 | 再開した run の usage は再開後の差分のみ | `test/unit/spawn.test.ts` + `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `subtractUsage` |
 | run の表示名は `tasks[].name`、無ければ agent 名、複数 run では連番 | `test/unit/spawn.test.ts` | `src/spawn.ts` の `displayNames` |
@@ -98,8 +102,8 @@
 `src/spawn.ts` の `createChildChannel` だけは実 SDK セッションを必要とするため自動テストの対象外です。
 ここは実モデルで確認します。
 
-1. 2エージェントを並列 spawn し、片方が `target_run_id=<相手の run id>` を指定した `message_agent` を呼び、
-   相手に新しいターンが起き、受け手のセッションに `message_agent from_run_id=<id> name="<name>"` ヘッダー付きで届き、
+1. 2エージェントを並列 spawn し、片方が `target_session_id=<相手の session id>` を指定した `message_agent` を呼び、
+   相手に新しいターンが起き、受け手のセッションに `message_agent from_session_id=<id> name="<name>"` ヘッダー付きで届き、
    会話後の最新の発話が結果に現れること。
 2. agent 定義の frontmatter に `extensions: true` を書いた agent を spawn し、子から MCP ツールを1つ呼ばせて結果に現れること。
    呼び出しの終了後に MCP サーバーのプロセスが残っていないこと(`pgrep -f` などで確認)。
@@ -110,8 +114,10 @@
    完了後の結果の表示に表示名・モデル・コンテキスト使用量・コスト・run 別 usage・`session_file` が出ること
    (進捗の追従と `done` の挙動は ADR 0004 と README の通り)。
    完了後、親セッションのコスト統計に子の使用量が加算されていること(`/session` のコスト統計で確認)。
-6. 子を spawn したときの run id を `resume_run_id` に渡して再 spawn し、前回の文脈を踏まえた返答が返ること。
-   `session_file` が前回と同じで、usage が再開後の分だけであること。
+6. 子を spawn したときの結果の `session_id` と `entry_id` を `resume_session_id` / `resume_entry_id` に渡して再 spawn し、
+   前回の文脈を踏まえた返答が返ること。結果の `session_id` が前回と同じで、`session_file` も同じ、
+   usage が再開後の分だけであること。さらに、その再開結果の組で再度 resume できること。
+   親を `/tree` で戻してから古い結果の組で resume し、破棄した枝の続きが混ざらないこと。
 7. `<project>/.pi/agents/` の定義が、信頼していないプロジェクトではカタログに現れず spawn も失敗し、
    trust 済み(`--approve` など)では現れて spawn できること。
 8. 子の実行中に `/spawn` でログを開き、追記への追従・スクロール・`Esc` での終了を確認する。
@@ -129,14 +135,14 @@
 2. 実使用: `~/.pi/agent/sessions/**/*.jsonl` と `~/.pi/agent/spawn-sessions/*.jsonl` を JSONL として読み、
    `role: "assistant"` の `content[].type == "toolCall"` を集計する。
    ツール別の呼び出し回数、
-   `spawn_agents` の `tasks[]` の各フィールド(agent / task / name / model / cwd / resume_run_id)と
-   `message_agent` の `target_run_id` / `text` の使用率、
+   `spawn_agents` の `tasks[]` の各フィールド(agent / task / name / model / cwd / resume_session_id / resume_entry_id)と
+   `message_agent` の `target_session_id` / `text` の使用率、
    `role: "toolResult"` のエラー(`details.error` か `Validation failed for tool`)を出す。
    - 開発セッションの意図的な不正 agent テストは誤用と数えず、通常利用と分ける。
    - 文字列 grep で `"name":"spawn_agents"` を数えると、システムプロンプトの `toolsAdded` を
      拾って過大になる。必ず toolCall パートをパースする。
 3. 判定: トークン占有率と使用率を突き合わせる。
-   - 余剰候補: トークンが大きく使用率が低い引数(`model` / `resume_run_id` 等)。
+   - 余剰候補: トークンが大きく使用率が低い引数(`model` / `resume_entry_id` 等)。
    - 不足: 誤用エラー。エラー本文が回復情報(定義済み agent 一覧等)を返せているか。
    - カタログは agent 定義数に比例して伸びるため、定義を増やした時に測る。
 4. 記録: 計測値は契約テストのコメントに反映する(変更時の手順と同じ)。
