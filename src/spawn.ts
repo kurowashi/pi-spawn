@@ -15,11 +15,13 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./catalog.ts";
+import { formatElapsed } from "./format.ts";
 import type { RunRegistry } from "./registry.ts";
 import type {
 	AgentChannel,
 	AgentDefinition,
 	ChannelSnapshot,
+	MessageSender,
 	RunHandle,
 	RunProgress,
 	RunUsage,
@@ -102,7 +104,7 @@ export interface CreateChannelInput {
 	agentDir: string;
 	model: ModelIdentity;
 	customTools: ToolDefinition[];
-	/** Parent conversation entries when context is "fork". */
+	/** Parent conversation entries when the agent definition sets `inheritConversation`. */
 	forkEntries?: FileEntry[];
 	/** Directory for persisted child transcripts. Undefined keeps the run in memory. */
 	sessionDir?: string;
@@ -115,6 +117,8 @@ export interface CreateChannelInput {
 /** Everything the child-facing tools need for one run. */
 export interface ChildToolInput {
 	registry: RunRegistry;
+	/** The child this tool set belongs to, so its messages carry a sender. */
+	self: MessageSender;
 }
 
 export interface SpawnDependencies {
@@ -135,14 +139,15 @@ export interface SpawnDependencies {
 
 export interface SpawnRequest {
 	tasks: SpawnTask[];
-	context?: "fresh" | "fork";
+	/** Whole-call deadline from the user config; undefined or 0 means no limit. */
 	timeoutMs?: number;
 }
 
 export interface SpawnContext {
 	cwd: string;
 	signal?: AbortSignal;
-	parentEntries?: FileEntry[];
+	/** Parent conversation entries, read only when a definition sets `inheritConversation`. */
+	parentEntries?: () => FileEntry[];
 	/** Parent session file, when the parent is persisted. */
 	parentSessionFile?: string;
 	/** Called once immediately, then every interval, with each live run's state. */
@@ -185,14 +190,16 @@ export async function spawnAgents(
 	const names = displayNames(request.tasks);
 	const planned = request.tasks.map((task, index) => planRun(task, names[index] ?? task.agent, spawnContext.cwd, deps));
 
-	const started = await startRuns(planned, request, spawnContext, deps);
+	const started = await startRuns(planned, spawnContext, deps);
 
-	const abortChildren = (): void => {
-		for (const { handle } of started) void handle.channel.abort();
+	const abortRuns = (reason: string): void => {
+		for (const { handle } of started) {
+			// A settled prompt keeps its own outcome; the abort only cuts a later induced turn.
+			if (handle.promptSettled !== true) handle.abortReason = reason;
+			void handle.channel.abort();
+		}
 	};
-	// One deadline for the whole call: induced turns are work this call caused too.
-	const timer = request.timeoutMs === undefined ? undefined : setTimeout(abortChildren, request.timeoutMs);
-	spawnContext.signal?.addEventListener("abort", abortChildren, { once: true });
+	const stopWatching = watchAborts(spawnContext.signal, request.timeoutMs, abortRuns);
 
 	let stopProgress: (() => void) | undefined;
 	try {
@@ -211,17 +218,49 @@ export async function spawnAgents(
 		return settled.map((entry) => finalizeResult(entry, errorsByRun.get(entry.handle.runId) ?? []));
 	} finally {
 		stopProgress?.();
-		if (timer !== undefined) clearTimeout(timer);
-		spawnContext.signal?.removeEventListener("abort", abortChildren);
+		stopWatching();
 		for (const { handle } of started) deps.registry.remove(handle.runId);
 		await disposeAll(started);
 	}
 }
 
+/**
+ * Wire the call deadline and the parent's abort signal to one abort callback.
+ *
+ * One deadline covers the whole call: induced turns are work this call caused
+ * too. A signal that already fired aborts immediately, because its event will
+ * not fire again. The returned stop removes both, so an event that arrives after
+ * the call settled cannot reach channels that were already disposed.
+ */
+function watchAborts(
+	signal: AbortSignal | undefined,
+	timeoutMs: number | undefined,
+	abort: (reason: string) => void,
+): () => void {
+	if (signal?.aborted === true) {
+		abort("aborted");
+		return () => {};
+	}
+	const onParentAbort = (): void => abort("aborted");
+	signal?.addEventListener("abort", onParentAbort, { once: true });
+	const timer =
+		timeoutMs === undefined || timeoutMs === 0
+			? undefined
+			: setTimeout(() => abort(`timed out after ${deadlineLabel(timeoutMs)}`), timeoutMs);
+	return () => {
+		if (timer !== undefined) clearTimeout(timer);
+		signal?.removeEventListener("abort", onParentAbort);
+	};
+}
+
+/** The deadline as the error reports it: milliseconds below one second, else the elapsed form. */
+function deadlineLabel(timeoutMs: number): string {
+	return timeoutMs < 1000 ? `${timeoutMs}ms` : formatElapsed(timeoutMs);
+}
+
 /** Create one channel per plan. Nothing this helper created survives a failure inside it. */
 async function startRuns(
 	planned: readonly PlannedRun[],
-	request: SpawnRequest,
 	spawnContext: SpawnContext,
 	deps: SpawnDependencies,
 ): Promise<Array<{ run: PlannedRun; handle: RunHandle }>> {
@@ -234,9 +273,9 @@ async function startRuns(
 				cwd: run.cwd,
 				agentDir: deps.agentDir,
 				model: run.model,
-				customTools: deps.childTools({ registry: deps.registry }),
-				...(request.context === "fork" && spawnContext.parentEntries !== undefined
-					? { forkEntries: spawnContext.parentEntries }
+				customTools: deps.childTools({ registry: deps.registry, self: { runId: run.runId, name: run.name } }),
+				...(run.definition.inheritConversation && spawnContext.parentEntries !== undefined
+					? { forkEntries: spawnContext.parentEntries() }
 					: {}),
 				...(deps.sessionDir === undefined ? {} : { sessionDir: deps.sessionDir }),
 				...(spawnContext.parentSessionFile === undefined ? {} : { parentSessionFile: spawnContext.parentSessionFile }),
@@ -387,12 +426,29 @@ interface SettledRun {
 
 /** Run one prompt and keep its handle for finalization. */
 async function runWithHandle(entry: StartedRun): Promise<SettledRun> {
-	return { handle: entry.handle, result: await runOne(entry) };
+	const result = await runOne(entry);
+	entry.handle.promptSettled = true;
+	return { handle: entry.handle, result };
 }
 
-/** The caller's view of one run: its latest output, usage, and any induced-turn failure. */
+/** The caller's view of one run: its latest output, usage, and any failure. */
 function finalizeResult(entry: SettledRun, inducedErrors: readonly string[]): SpawnResult {
-	return withInducedErrors({ ...entry.result, ...latestOutput(entry), ...snapshotFields(entry.handle) }, inducedErrors);
+	const snapshot = entry.handle.channel.snapshot();
+	const result = withInducedErrors(
+		{ ...entry.result, ...latestOutput(entry), ...snapshotFields(entry.handle, snapshot) },
+		inducedErrors,
+	);
+	if (result.error !== undefined) return result;
+	const failure = failureLabel(entry.handle, snapshot);
+	return failure === undefined ? result : { ...result, error: failure };
+}
+
+/** Why the run did not finish: an abort this call caused, or the model's own error. */
+export function failureLabel(handle: RunHandle, snapshot: ChannelSnapshot): string | undefined {
+	if (handle.abortReason !== undefined) return handle.abortReason;
+	if (snapshot.outcome?.stopReason === "error") return snapshot.outcome.errorMessage ?? "the model run failed";
+	if (snapshot.outcome?.stopReason === "aborted") return "aborted";
+	return undefined;
 }
 
 /**
@@ -423,9 +479,11 @@ async function runOne(started: StartedRun): Promise<SpawnResult> {
 	}
 }
 
-/** Usage, elapsed time, context, and transcript path as of now; read once the run has stopped for good. */
-function snapshotFields(handle: RunHandle): Pick<SpawnResult, "usage" | "context" | "elapsed_ms" | "session_file"> {
-	const snapshot = handle.channel.snapshot();
+/** Usage, elapsed time, context, and transcript path as of the given snapshot. */
+function snapshotFields(
+	handle: RunHandle,
+	snapshot: ChannelSnapshot,
+): Pick<SpawnResult, "usage" | "context" | "elapsed_ms" | "session_file"> {
 	return {
 		usage: subtractUsage(snapshot.usage, handle.usageBase),
 		elapsed_ms: runElapsed(handle, snapshot),
@@ -451,18 +509,23 @@ export function subtractUsage(current: RunUsage, base: RunUsage): RunUsage {
 }
 
 /**
- * The one-line peer list prepended to a run's task when it has siblings.
+ * The peer list prepended to a run's task when it has siblings.
  *
  * Run ids only exist after the call has been planned, so this is the only way a
- * child can learn them; without it `to: <run id>` would be unusable and two runs
- * of the same agent could not be told apart. Addresses are agent names and run
- * ids; display labels stay parent-facing.
+ * child can learn them; without it `target_run_id` would be unusable and two
+ * runs of the same agent could not be told apart. Every line carries the same
+ * keys the `message_agent` result uses: run id first, labels as annotations.
  */
 export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]): string {
 	const siblings = handles.filter((handle) => handle.runId !== self.runId);
 	if (siblings.length === 0) return "";
-	const list = siblings.map((handle) => `${handle.agent} (${handle.runId})`).join(", ");
-	return `Siblings you can message with message_agent: ${list}\n\n`;
+	const list = siblings
+		.map(
+			(handle) =>
+				`- target_run_id=${handle.runId} name=${JSON.stringify(handle.name)} agent=${JSON.stringify(handle.agent)}`,
+		)
+		.join("\n");
+	return `Siblings you can message with message_agent:\n${list}\n\n`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -579,6 +642,7 @@ export function wrapSession(session: AgentSession): AgentChannel {
 			const preview = state.preview();
 			const settledAt = state.settledAt();
 			const context = session.getContextUsage();
+			const outcome = lastAssistantOutcome(session.messages);
 			return {
 				activity: state.activity(),
 				...(preview === undefined ? {} : { preview }),
@@ -586,6 +650,7 @@ export function wrapSession(session: AgentSession): AgentChannel {
 				usage: usageFromStats(session.getSessionStats()),
 				...(context === undefined ? {} : { context }),
 				...(sessionFile === undefined ? {} : { sessionFile }),
+				...(outcome === undefined ? {} : { outcome }),
 			};
 		},
 	};
@@ -699,6 +764,29 @@ function lastAssistantText(messages: readonly unknown[]): string | undefined {
 		if (text !== undefined) return text;
 	}
 	return undefined;
+}
+
+/** Stop reason and error of the last assistant message, or undefined before one completes. */
+export function lastAssistantOutcome(
+	messages: readonly unknown[],
+): { stopReason: string; errorMessage?: string } | undefined {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (!isAssistantMessage(message)) continue;
+		if (typeof message.stopReason !== "string") return undefined;
+		return { stopReason: message.stopReason, ...errorField(message.errorMessage) };
+	}
+	return undefined;
+}
+
+function isAssistantMessage(
+	message: unknown,
+): message is { role: "assistant"; stopReason?: unknown; errorMessage?: unknown } {
+	return typeof message === "object" && message !== null && "role" in message && message.role === "assistant";
+}
+
+function errorField(value: unknown): { errorMessage?: string } {
+	return typeof value === "string" ? { errorMessage: value } : {};
 }
 
 /** Text of an assistant message, or undefined when the message is not assistant text. */

@@ -30,28 +30,21 @@ function handle(runId: string, agent: string, channel: Partial<AgentChannel> = {
 	};
 }
 
-test("resolves a run id before a name", () => {
+test("resolves an exact run id", () => {
 	const runs = [handle("aaa", "reviewer"), handle("bbb", "reviewer")];
 	const byId = resolveTarget("bbb", runs);
 	assert.ok(byId.ok);
 	assert.equal(byId.handle.runId, "bbb");
 });
 
-test("resolves a unique agent name", () => {
+test("an agent name is not an address", () => {
 	const result = resolveTarget("writer", [handle("aaa", "reviewer"), handle("bbb", "writer")]);
-	assert.ok(result.ok);
-	assert.equal(result.handle.runId, "bbb");
-});
-
-test("reports an ambiguous name with its candidates", () => {
-	const result = resolveTarget("reviewer", [handle("aaa", "reviewer"), handle("bbb", "reviewer")]);
 	assert.equal(result.ok, false);
-	assert.ok(!result.ok && result.reason === "ambiguous" && result.candidates.length === 2);
 });
 
 test("reports an unknown target", () => {
 	const result = resolveTarget("nope", [handle("aaa", "reviewer")]);
-	assert.ok(!result.ok && result.reason === "not_found");
+	assert.equal(result.ok, false);
 });
 
 test("the registry only exposes live runs", () => {
@@ -61,12 +54,15 @@ test("the registry only exposes live runs", () => {
 	assert.equal(registry.resolve("aaa").ok, false);
 });
 
+/** The sender every delivery test uses; the envelope it produces is pinned in one test below. */
+const FROM = { runId: "aaa", name: "reviewer" };
+
 test("delivery is one-way, whatever the recipient is doing", async () => {
 	const calls: string[] = [];
 	const target = handle("bbb", "writer", { deliver: async (text) => void calls.push(`deliver:${text}`) });
-	const outcome = await deliverMessage({ target, text: "hi" });
+	const outcome = await deliverMessage({ target, from: FROM, text: "hi" });
 	assert.deepEqual(outcome, { delivered: true });
-	assert.deepEqual(calls, ["deliver:hi"]);
+	assert.deepEqual(calls, [`deliver:message_agent from_run_id=aaa name="reviewer"\n\nhi`]);
 });
 
 test("delivery returns before the turn it started settles", async () => {
@@ -75,7 +71,7 @@ test("delivery returns before the turn it started settles", async () => {
 		settle = resolve;
 	});
 	const target = handle("bbb", "writer", { deliver: () => turn });
-	const outcome = await deliverMessage({ target, text: "hi" });
+	const outcome = await deliverMessage({ target, from: FROM, text: "hi" });
 	assert.deepEqual(outcome, { delivered: true });
 	assert.equal(target.induced.size, 1, "the turn is tracked for the spawn call");
 	settle();
@@ -88,7 +84,7 @@ test("a synchronous delivery failure is reported to the sender", async () => {
 			throw new Error("session is closed");
 		},
 	});
-	const outcome = await deliverMessage({ target, text: "hi" });
+	const outcome = await deliverMessage({ target, from: FROM, text: "hi" });
 	assert.deepEqual(outcome, { delivered: false, error: "session is closed" });
 });
 
@@ -98,7 +94,7 @@ test("a failed turn is recorded on the target, not thrown to the sender", async 
 			throw new Error("session is closed");
 		},
 	});
-	const outcome = await deliverMessage({ target, text: "hi" });
+	const outcome = await deliverMessage({ target, from: FROM, text: "hi" });
 	assert.deepEqual(outcome, { delivered: true });
 	assert.deepEqual(target.inducedErrors, ["session is closed"]);
 });

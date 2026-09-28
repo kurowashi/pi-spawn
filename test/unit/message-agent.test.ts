@@ -48,7 +48,7 @@ async function call(tool: ToolDefinition, params: Record<string, unknown>): Prom
 function makeTool(targets: RunHandle[]): ToolDefinition {
 	const registry = createRunRegistry();
 	for (const target of targets) registry.add(target);
-	return createMessageAgentTool({ registry });
+	return createMessageAgentTool({ registry, self: { runId: "aaa", name: "sender" } });
 }
 
 test("a message reports delivery, not a reply", async () => {
@@ -56,36 +56,36 @@ test("a message reports delivery, not a reply", async () => {
 	const target = handle("bbb", "writer", { deliver: async (text) => void sent.push(text) });
 	const tool = makeTool([target]);
 
-	const result = await call(tool, { to: "writer", text: "status?" });
+	const result = await call(tool, { target_run_id: "bbb", text: "status?" });
 
 	assert.equal(textOf(result), "delivered");
-	assert.deepEqual(sent, ["status?"]);
-	assert.deepEqual(result.details, { to: "bbb", agent: "writer" });
+	assert.deepEqual(sent, ['message_agent from_run_id=aaa name="sender"\n\nstatus?']);
+	assert.deepEqual(result.details, { target_run_id: "bbb", agent: "writer" });
 });
 
-test("an ambiguous name lists the run ids to use instead", async () => {
+test("an agent name is not an address; the failure lists live run ids", async () => {
 	const tool = makeTool([handle("bbb", "writer"), handle("ccc", "writer")]);
 
 	await assert.rejects(
-		() => call(tool, { to: "writer", text: "hi" }),
+		() => call(tool, { target_run_id: "writer", text: "hi" }),
 		(error: Error) => {
-			assert.match(error.message, /'bbb', 'ccc' are all live/);
-			assert.match(error.message, /run ids/);
+			assert.match(error.message, /no live run has target_run_id 'writer'/);
+			assert.match(error.message, /Live run_ids: bbb, ccc/);
 			return true;
 		},
 	);
 });
 
-test("an unknown target lists the live runs with their addresses", async () => {
+test("an unknown target lists the live run ids", async () => {
 	const tool = makeTool([handle("bbb", "writer")]);
 
-	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /writer, bbb/);
+	await assert.rejects(() => call(tool, { target_run_id: "ghost", text: "hi" }), /Live run_ids: bbb/);
 });
 
 test("an unknown target with nothing live says so", async () => {
 	const tool = makeTool([]);
 
-	await assert.rejects(() => call(tool, { to: "ghost", text: "hi" }), /\(none\)/);
+	await assert.rejects(() => call(tool, { target_run_id: "ghost", text: "hi" }), /\(none\)/);
 });
 
 test("a synchronous delivery failure reaches the sender as a tool error", async () => {
@@ -96,7 +96,7 @@ test("a synchronous delivery failure reaches the sender as a tool error", async 
 	});
 	const tool = makeTool([target]);
 
-	await assert.rejects(() => call(tool, { to: "writer", text: "hi" }), /session is closed/);
+	await assert.rejects(() => call(tool, { target_run_id: "bbb", text: "hi" }), /session is closed/);
 });
 
 test("a failed turn is recorded on the target, not thrown to the sender", async () => {
@@ -107,7 +107,7 @@ test("a failed turn is recorded on the target, not thrown to the sender", async 
 	});
 	const tool = makeTool([target]);
 
-	const result = await call(tool, { to: "writer", text: "hi" });
+	const result = await call(tool, { target_run_id: "bbb", text: "hi" });
 
 	assert.equal(textOf(result), "delivered");
 	assert.deepEqual(target.inducedErrors, ["session is closed"]);

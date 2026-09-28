@@ -24,6 +24,7 @@ const KNOWN_KEYS = new Set([
 	"systemPromptMode",
 	"inheritProjectContext",
 	"inheritSkills",
+	"inheritConversation",
 	"extensions",
 ]);
 
@@ -55,6 +56,7 @@ export function parseAgent(
 		body: body.trim(),
 		inheritProjectContext: frontmatter["inheritProjectContext"] !== false,
 		inheritSkills: frontmatter["inheritSkills"] !== false,
+		inheritConversation: frontmatter["inheritConversation"] === true,
 		extensions: frontmatter["extensions"] === true,
 		systemPromptMode: readSystemPromptMode(frontmatter["systemPromptMode"], path, warn),
 		path,

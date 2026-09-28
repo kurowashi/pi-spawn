@@ -92,6 +92,17 @@ test("has no last assistant text before the first turn", () => {
 	assert.equal(makeFake().channel.lastAssistantText(), undefined);
 });
 
+test("snapshot carries how the last assistant message ended", () => {
+	const fake = makeFake({
+		messages: [
+			{ role: "assistant", stopReason: "toolUse" },
+			{ role: "assistant", stopReason: "error", errorMessage: "provider exploded" },
+		],
+	});
+	assert.deepEqual(fake.channel.snapshot().outcome, { stopReason: "error", errorMessage: "provider exploded" });
+	assert.equal(makeFake().channel.snapshot().outcome, undefined, "no message means no outcome");
+});
+
 test("dispose emits session_shutdown before releasing the session", async () => {
 	const fake = makeFake();
 	await fake.channel.dispose();

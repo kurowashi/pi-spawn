@@ -24,9 +24,17 @@ export interface AgentDefinition {
 	systemPromptMode: "append" | "replace";
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	/** Start the child from a copy of the parent's conversation (default false). */
+	inheritConversation: boolean;
 	/** Load the configured extensions inside the child session (default false). */
 	extensions: boolean;
 	path: string;
+}
+
+/** Who sent a sibling message: the addressing key and the display label. */
+export interface MessageSender {
+	runId: string;
+	name: string;
 }
 
 /** One unit of work inside a spawn_agents call. */
@@ -67,6 +75,8 @@ export interface ChannelSnapshot {
 	context?: ContextUsage;
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
+	/** How the last assistant message ended; absent before the first message completes. */
+	outcome?: { stopReason: string; errorMessage?: string };
 }
 
 /** One live run's state, as reported to the parent while a spawn call is in flight. */
@@ -151,6 +161,10 @@ export interface RunHandle {
 	induced: Set<Promise<void>>;
 	/** Failures from induced turns, reported on this run's result. */
 	inducedErrors: string[];
+	/** True once this run's own prompt settled; a later abort must not relabel it. */
+	promptSettled?: boolean;
+	/** Why this run was aborted, when the call or the parent stopped it. */
+	abortReason?: string;
 	/** Usage already billed before this run started; a resumed run reports only the delta. */
 	usageBase: RunUsage;
 }

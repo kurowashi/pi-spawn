@@ -26,9 +26,15 @@ const MAX_DESCRIPTION_CHARS = 160;
 /** Top-level parameters per tool. A tool needing more is probably two tools. */
 const MAX_TOP_LEVEL_PARAMETERS = 3;
 
+/** The exact top-level parameter names per tool; a rename is a model-facing surface change. */
+const EXPECTED_PARAMETERS: Record<string, string[]> = {
+	spawn_agents: ["tasks"],
+	message_agent: ["target_run_id", "text"],
+};
+
 /** The child-facing surface, built exactly as spawn_agents builds it. */
 function childToolsForTest(): ToolDefinition[] {
-	return childTools({ registry: createRunRegistry() });
+	return childTools({ registry: createRunRegistry(), self: { runId: "run-1", name: "self" } });
 }
 
 /** The subset of JSON Schema this contract reads from a TypeBox schema. */
@@ -94,5 +100,14 @@ test("schemas are closed and stay within the parameter cap", async () => {
 			count <= MAX_TOP_LEVEL_PARAMETERS,
 			`${tool.name} has ${count} parameters, cap is ${MAX_TOP_LEVEL_PARAMETERS}`,
 		);
+	}
+});
+
+test("every tool exposes exactly the decided parameter names", async () => {
+	const tools = [...(await loadSpawnTools()).values(), ...childToolsForTest()];
+	for (const tool of tools) {
+		const expected = EXPECTED_PARAMETERS[tool.name];
+		assert.ok(expected, `${tool.name} has no expected parameter list`);
+		assert.deepEqual(Object.keys(schemaOf(tool).properties ?? {}).sort(), [...expected].sort());
 	}
 });

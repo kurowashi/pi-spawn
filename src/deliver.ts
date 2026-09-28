@@ -7,13 +7,22 @@
  * its completion; the sender never waits for it.
  */
 
-import type { RunHandle } from "./types.ts";
+import type { MessageSender, RunHandle } from "./types.ts";
 
 export type DeliverOutcome = { delivered: true } | { delivered: false; error: string };
 
 export interface DeliverRequest {
 	target: RunHandle;
+	from: MessageSender;
 	text: string;
+}
+
+/**
+ * One message as the recipient sees it: a `from_run_id` header, then the text.
+ * The header is the only way the recipient can attribute and answer a message.
+ */
+export function formatMessage(from: MessageSender, text: string): string {
+	return `message_agent from_run_id=${from.runId} name=${JSON.stringify(from.name)}\n\n${text}`;
 }
 
 /**
@@ -22,7 +31,7 @@ export interface DeliverRequest {
  */
 export async function deliverMessage(request: DeliverRequest): Promise<DeliverOutcome> {
 	try {
-		startDelivery(request.target, request.text);
+		startDelivery(request.target, formatMessage(request.from, request.text));
 		return { delivered: true };
 	} catch (error) {
 		return { delivered: false, error: describe(error) };

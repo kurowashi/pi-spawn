@@ -7,7 +7,6 @@
  */
 
 import { join } from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
 	type AgentToolResult,
 	type AgentToolUpdateCallback,
@@ -20,6 +19,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { definitionRoots } from "../catalog.ts";
+import { loadSpawnConfig } from "../config.ts";
 import { contextText, formatCost, formatElapsed, formatTokenCount, type TextTheme } from "../format.ts";
 import type { RunRegistry } from "../registry.ts";
 import {
@@ -55,12 +55,6 @@ const Task = Type.Object(
 const Parameters = Type.Object(
 	{
 		tasks: Type.Array(Task, { minItems: 1, description: "Tasks to run concurrently" }),
-		context: Type.Optional(
-			StringEnum(["fresh", "fork"] as const, {
-				description: "fresh: empty context (default); fork: copy this conversation",
-			}),
-		),
-		timeout_seconds: Type.Optional(Type.Number({ description: "Abort every run after this many seconds" })),
 	},
 	{ additionalProperties: false },
 );
@@ -73,6 +67,13 @@ export interface SpawnToolOptions {
 }
 
 export function createSpawnAgentsTool(options: SpawnToolOptions) {
+	const notified = new Set<string>();
+	/** Config problems are worth saying once, not on every call. */
+	const notifyOnce = (message: string, ctx: ExtensionContext): void => {
+		if (notified.has(message) || ctx.hasUI !== true) return;
+		notified.add(message);
+		ctx.ui.notify(message, "warning");
+	};
 	return defineTool<typeof Parameters, SpawnToolDetails>({
 		name: "spawn_agents",
 		label: "Spawn agents",
@@ -89,10 +90,16 @@ export function createSpawnAgentsTool(options: SpawnToolOptions) {
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentDir = getAgentDir();
 			const projectTrusted = ctx.isProjectTrusted();
+			const { config, warnings } = loadSpawnConfig({ cwd: ctx.cwd, agentDir, projectTrusted });
+			for (const warning of warnings) notifyOnce(warning, ctx);
 			const deps =
 				options.dependencies?.({ cwd: ctx.cwd, agentDir, projectTrusted }) ??
 				buildDependencies(options, ctx, agentDir, projectTrusted);
-			const results = await spawnAgents(spawnRequest(params), spawnContext(ctx, params, signal, onUpdate), deps);
+			const results = await spawnAgents(
+				spawnRequest(params, config.timeoutMs),
+				spawnContext(ctx, signal, onUpdate),
+				deps,
+			);
 			const usage = totalUsage(results);
 			return {
 				content: [{ type: "text" as const, text: formatResults(results) }],
@@ -103,19 +110,17 @@ export function createSpawnAgentsTool(options: SpawnToolOptions) {
 	});
 }
 
-/** The spawn request as the tool arguments express it. */
-export function spawnRequest(params: Static<typeof Parameters>): SpawnRequest {
+/** The spawn request as the tool arguments and the user config express it. */
+export function spawnRequest(params: Static<typeof Parameters>, timeoutMs: number): SpawnRequest {
 	return {
 		tasks: params.tasks,
-		...(params.context === undefined ? {} : { context: params.context }),
-		...(params.timeout_seconds === undefined ? {} : { timeoutMs: params.timeout_seconds * 1000 }),
+		...(timeoutMs === 0 ? {} : { timeoutMs }),
 	};
 }
 
-/** The spawn context for this turn, including the parent's transcript when forking. */
+/** The spawn context for this turn, including a lazy reader for the parent's transcript. */
 export function spawnContext(
 	ctx: ExtensionContext,
-	params: Static<typeof Parameters>,
 	signal: AbortSignal | undefined,
 	onUpdate: AgentToolUpdateCallback<SpawnToolDetails> | undefined,
 ): SpawnContext {
@@ -123,7 +128,8 @@ export function spawnContext(
 	return {
 		cwd: ctx.cwd,
 		...(signal === undefined ? {} : { signal }),
-		...(params.context === "fork" ? { parentEntries: [...ctx.sessionManager.getEntries()] } : {}),
+		// Read only when a definition sets inheritConversation; the closure keeps that cost off the common path.
+		parentEntries: () => [...ctx.sessionManager.getEntries()],
 		...(parentSessionFile === undefined ? {} : { parentSessionFile }),
 		...(onUpdate === undefined ? {} : { onProgress: (progress) => onUpdate(progressResult(progress)) }),
 	};
@@ -133,7 +139,7 @@ export function spawnContext(
 export function formatResults(results: readonly SpawnResult[]): string {
 	return results
 		.map((result) => {
-			const header = `[${result.name}] ${result.run_id} (${result.model})`;
+			const header = `[${result.name}] run_id=${result.run_id} (${result.model})`;
 			return result.error === undefined ? `${header}\n${result.output ?? ""}` : `${header}\nERROR: ${result.error}`;
 		})
 		.join("\n\n");
@@ -166,7 +172,7 @@ export function progressResult(progress: readonly RunProgress[]): AgentToolResul
 export function formatProgress(progress: readonly RunProgress[]): string {
 	return progress
 		.map((run) => {
-			const line = `[${run.name}] ${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})${statsSuffix(run)}`;
+			const line = `[${run.name}] run_id=${run.run_id} \u2014 ${run.activity} (${formatElapsed(run.elapsed_ms)})${statsSuffix(run)}`;
 			return run.preview === undefined ? line : `${line} \u00b7 ${run.preview}`;
 		})
 		.join("\n");
@@ -201,7 +207,7 @@ function renderToolText(
 
 function formatResultBlock(result: SpawnResult, expanded: boolean, theme: TextTheme): string {
 	const elapsed = result.elapsed_ms === undefined ? "" : ` \u2014 ${formatElapsed(result.elapsed_ms)}`;
-	const header = `${theme.fg("accent", `[${result.name}] ${result.run_id}`)}${theme.fg("dim", ` (${result.model})${elapsed}`)}`;
+	const header = `${theme.fg("accent", `[${result.name}] run_id=${result.run_id}`)}${theme.fg("dim", ` (${result.model})${elapsed}`)}`;
 	const body = result.error === undefined ? excerpt(result.output ?? "", expanded) : `ERROR: ${result.error}`;
 	const meta = formatResultMeta(result, theme);
 	return [header, body, meta].filter((part) => part.length > 0).join("\n");

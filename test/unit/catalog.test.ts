@@ -36,6 +36,7 @@ thinking: medium
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
+inheritConversation: true
 extensions: true
 ---
 
@@ -49,8 +50,15 @@ Body text.
 	assert.equal(agent.systemPromptMode, "replace");
 	assert.equal(agent.inheritProjectContext, false);
 	assert.equal(agent.inheritSkills, false);
+	assert.equal(agent.inheritConversation, true);
 	assert.equal(agent.extensions, true);
 	assert.equal(agent.body, "Body text.");
+});
+
+test("conversation inheritance is opt-in", () => {
+	assert.equal(parse("---\nname: a\n---\n")?.inheritConversation, false);
+	assert.equal(parse("---\nname: a\ninheritConversation: false\n---\n")?.inheritConversation, false);
+	assert.equal(parse("---\nname: a\ninheritConversation: true\n---\n")?.inheritConversation, true);
 });
 
 test("accepts a tools array as well as a comma separated list", () => {
@@ -170,6 +178,7 @@ test("formats a one-line catalog from the definitions as written", () => {
 			body: "",
 			inheritProjectContext: true,
 			inheritSkills: true,
+			inheritConversation: false,
 			extensions: false,
 			systemPromptMode: "append",
 			path: "p",
@@ -180,6 +189,7 @@ test("formats a one-line catalog from the definitions as written", () => {
 			body: "",
 			inheritProjectContext: true,
 			inheritSkills: true,
+			inheritConversation: false,
 			extensions: false,
 			systemPromptMode: "append",
 			path: "p",

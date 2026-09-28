@@ -2,39 +2,25 @@
  * The only mutable state in this extension: the set of live runs created by one
  * spawn_agents call, so siblings can address each other.
  *
- * Resolution is a pure function over the handle list, so address ambiguity is
- * decided by a unit test rather than by whichever run happens to be first.
+ * Run ids are the only address: one form exists, so no resolution ambiguity can
+ * arise. The failure text lists live run ids so the caller can retry verbatim.
  */
 
 import type { RunHandle } from "./types.ts";
 
-export type TargetResolution =
-	| { ok: true; handle: RunHandle }
-	| { ok: false; reason: "not_found" }
-	| { ok: false; reason: "ambiguous"; candidates: string[] };
+export type TargetResolution = { ok: true; handle: RunHandle } | { ok: false };
 
-/** Resolve `to` against live runs. Exact run id wins; otherwise the agent name must be unique. */
-export function resolveTarget(to: string, handles: readonly RunHandle[]): TargetResolution {
-	const byId = handles.find((handle) => handle.runId === to);
-	if (byId !== undefined) return { ok: true, handle: byId };
-
-	const byName = handles.filter((handle) => handle.agent === to);
-	const [first] = byName;
-	if (first === undefined) return { ok: false, reason: "not_found" };
-	if (byName.length > 1) {
-		return { ok: false, reason: "ambiguous", candidates: byName.map((handle) => handle.runId) };
-	}
-	return { ok: true, handle: first };
+/** Resolve `target_run_id` against live runs. Exact match only. */
+export function resolveTarget(runId: string, handles: readonly RunHandle[]): TargetResolution {
+	const handle = handles.find((candidate) => candidate.runId === runId);
+	return handle === undefined ? { ok: false } : { ok: true, handle };
 }
 
-/** The failure explanation for a rejected resolve, naming every live run so the caller can retry. */
-export function explainTarget(to: string, resolution: TargetResolution, handles: readonly RunHandle[]): string {
+/** The failure explanation for a rejected resolve, naming every live run id so the caller can retry. */
+export function explainTarget(runId: string, resolution: TargetResolution, handles: readonly RunHandle[]): string {
 	if (resolution.ok) return "";
-	if (resolution.reason === "ambiguous") {
-		return `'${resolution.candidates.join("', '")}' are all live: address one of those run ids instead of the agent name`;
-	}
-	const live = handles.map((handle) => `${handle.name} (${handle.agent}, ${handle.runId})`).join(", ");
-	return `no live run matches '${to}'. Address by run id or a unique agent name. Live runs: ${live.length > 0 ? live : "(none)"}`;
+	const live = handles.map((handle) => handle.runId).join(", ");
+	return `no live run has target_run_id '${runId}'. Live run_ids: ${live.length > 0 ? live : "(none)"}`;
 }
 
 export interface RunRegistry {

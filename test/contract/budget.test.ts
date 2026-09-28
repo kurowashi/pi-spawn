@@ -30,6 +30,9 @@ import { loadSpawnTools } from "../helpers/extension.ts";
  * After removing wait_for_reply: 319 tokens (spawn_agents 248, message_agent 71).
  *
  * After run names and display stats: 344 tokens (spawn_agents 273, message_agent 71).
+ *
+ * After run-id-only addressing and moving context/timeout out of the tool:
+ * 304 tokens (spawn_agents 217, message_agent 87).
  */
 const TOKEN_BUDGET = 400;
 
@@ -40,7 +43,10 @@ function tokensOf(name: string, tool: ToolDefinition): number {
 }
 
 test("model-facing tool surface stays inside the token budget", async () => {
-	const tools = [...(await loadSpawnTools()).values(), ...childTools({ registry: createRunRegistry() })];
+	const tools = [
+		...(await loadSpawnTools()).values(),
+		...childTools({ registry: createRunRegistry(), self: { runId: "run-1", name: "self" } }),
+	];
 
 	let total = 0;
 	const perTool: string[] = [];

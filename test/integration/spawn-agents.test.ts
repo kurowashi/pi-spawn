@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { AgentToolResult, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionContext, FileEntry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
 import { type CreateChannelInput, type SpawnDependencies, spawnAgents } from "../../src/spawn.ts";
 import { childTools } from "../../src/tools/child-tools.ts";
@@ -23,6 +23,8 @@ import type { AgentChannel, RunProgress, SpawnResult } from "../../src/types.ts"
 
 interface FakeRun {
 	channel: AgentChannel;
+	/** The run id the call assigned; the only address siblings accept. */
+	runId: string;
 	/** Messages delivered while the run was streaming. */
 	steered: string[];
 	/** Messages delivered while the run was idle, each starting a turn. */
@@ -52,14 +54,19 @@ interface FakeRun {
 	usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number };
 	/** Persisted transcript path, when the run is file-backed. */
 	sessionFile?: string;
-	/** Resolves when the run is aborted. Lets a script simulate long work. */
-	waitForAbort(): Promise<never>;
+	/**
+	 * Resolves when the run is aborted. Pi resolves an aborted prompt instead of
+	 * rejecting it, so the fake does the same; a result must be labelled by the
+	 * abort reason, not by an exception.
+	 */
+	waitForAbort(): Promise<void>;
 }
 
 function createFakeRun(agent: string): FakeRun {
 	let abortPrompt: (() => void) | undefined;
 	let releaseDelivery: (() => void) | undefined;
 	const run: FakeRun = {
+		runId: "",
 		steered: [],
 		queued: [],
 		output: `${agent} finished`,
@@ -77,8 +84,8 @@ function createFakeRun(agent: string): FakeRun {
 		activity: "starting",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
 		waitForAbort: () =>
-			new Promise<never>((_resolve, reject) => {
-				abortPrompt = () => reject(new Error("run aborted"));
+			new Promise<void>((resolve) => {
+				abortPrompt = resolve;
 			}),
 		channel: undefined as never,
 	};
@@ -174,6 +181,7 @@ function makeHarness(
 		childTools: (input) => childTools(input),
 		createChannel: async (input) => {
 			const run = createFakeRun(input.agent.name);
+			run.runId = input.runId;
 			run.channel.prompt = async (text) => {
 				run.received.push(text);
 				if (run.failure !== undefined) throw new Error(run.failure);
@@ -205,9 +213,11 @@ const BOTH_TASKS = {
 test("a message starts a turn on an idle sibling", async () => {
 	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
 		if (input.agent.name !== "reviewer") return;
+		const writer = harness.runs.get("writer");
+		assert.ok(writer, "the sibling channel exists before any prompt runs");
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool, "the child receives the message tool");
-		await callTool(tool, { to: "writer", text: "is the draft ready?" });
+		await callTool(tool, { target_run_id: writer.runId, text: "is the draft ready?" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -217,7 +227,11 @@ test("a message starts a turn on an idle sibling", async () => {
 		["reviewer", "writer"],
 	);
 	assert.equal(results[0]?.error, undefined);
-	assert.deepEqual(harness.runs.get("writer")?.queued, ["is the draft ready?"], "an idle sibling gets a new turn");
+	assert.deepEqual(
+		harness.runs.get("writer")?.queued,
+		['message_agent from_run_id=run-1 name="reviewer"\n\nis the draft ready?'],
+		"an idle sibling gets a new turn, tagged with the sender",
+	);
 	assert.deepEqual(harness.runs.get("writer")?.steered, []);
 });
 
@@ -229,12 +243,12 @@ test("a streaming sibling is interrupted instead of queued", async () => {
 		writer.streaming = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "ping" });
+		await callTool(tool, { target_run_id: writer.runId, text: "ping" });
 	});
 
 	await spawn(harness, BOTH_TASKS);
 
-	assert.deepEqual(harness.runs.get("writer")?.steered, ["ping"]);
+	assert.deepEqual(harness.runs.get("writer")?.steered, ['message_agent from_run_id=run-1 name="reviewer"\n\nping']);
 	assert.deepEqual(harness.runs.get("writer")?.queued, []);
 });
 
@@ -246,7 +260,7 @@ test("a turn a message started is waited for before the call returns", async () 
 		writer.holdDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work" });
+		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
 		// Release on a later macrotask; the call must still be waiting when it runs.
 		setTimeout(() => writer.releaseDelivery(), 0);
 	});
@@ -266,16 +280,16 @@ test("a run's result is its latest utterance, not its first", async () => {
 		const deliver = writer.channel.deliver;
 		writer.channel.deliver = async (text) => {
 			await deliver(text);
-			writer.output = `writer answered: ${text}`;
+			writer.output = "writer answered later";
 		};
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "final question" });
+		await callTool(tool, { target_run_id: writer.runId, text: "final question" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
 
-	assert.equal(results[1]?.output, "writer answered: final question");
+	assert.equal(results[1]?.output, "writer answered later");
 });
 
 test("a failed induced turn is reported on the run it happened in", async () => {
@@ -286,7 +300,7 @@ test("a failed induced turn is reported on the run it happened in", async () => 
 		writer.failDeliveries = true;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
-		await callTool(tool, { to: "writer", text: "extra work" });
+		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);
@@ -295,22 +309,22 @@ test("a failed induced turn is reported on the run it happened in", async () => 
 	assert.match(results[1]?.output ?? "", /delivery turn failed: induced exploded/);
 });
 
-test("an ambiguous agent name is refused and a run id resolves it", async () => {
+test("an agent name is refused and a run id resolves it", async () => {
 	const failures: string[] = [];
 	const harness = makeHarness(DEFINITIONS, async (input, _run, tools) => {
 		if (input.agent.name !== "reviewer") return;
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		try {
-			await callTool(tool, { to: "writer", text: "which one?" });
+			await callTool(tool, { target_run_id: "writer", text: "which one?" });
 		} catch (error) {
 			failures.push(error instanceof Error ? error.message : String(error));
 		}
-		const result = await callTool(tool, { to: "run-3", text: "you" });
+		const result = await callTool(tool, { target_run_id: "run-3", text: "you" });
 		assert.equal(textOf(result), "delivered");
 	});
 
-	// Two runs of the same agent in one call are the real source of ambiguity.
+	// Two runs of the same agent in one call cannot be told apart by name.
 	await spawn(harness, {
 		tasks: [
 			{ agent: "reviewer", task: "review" },
@@ -319,8 +333,8 @@ test("an ambiguous agent name is refused and a run id resolves it", async () => 
 		],
 	});
 
-	assert.equal(failures.length, 1, "the ambiguous name is refused once");
-	assert.match(failures[0] ?? "", /are all live/);
+	assert.equal(failures.length, 1, "the name is refused once");
+	assert.match(failures[0] ?? "", /no live run has target_run_id 'writer'/);
 	assert.match(failures[0] ?? "", /run-3/);
 });
 
@@ -328,17 +342,46 @@ test("every run is told which siblings it can message", async () => {
 	const harness = makeHarness(DEFINITIONS, async () => {});
 	await spawn(harness, BOTH_TASKS);
 
-	assert.match(
-		harness.runs.get("reviewer")?.received[0] ?? "",
-		/^Siblings you can message with message_agent: writer \(run-2\)\n\nreview$/,
+	assert.equal(
+		harness.runs.get("reviewer")?.received[0],
+		'Siblings you can message with message_agent:\n- target_run_id=run-2 name="writer" agent="writer"\n\nreview',
 	);
-	assert.match(harness.runs.get("writer")?.received[0] ?? "", /reviewer \(run-1\)/);
+	assert.match(harness.runs.get("writer")?.received[0] ?? "", /target_run_id=run-1 name="reviewer" agent="reviewer"/);
 });
 
 test("a lone run is not told about siblings", async () => {
 	const harness = makeHarness(DEFINITIONS, async () => {});
 	await spawn(harness, { tasks: [{ agent: "writer", task: "solo" }] });
 	assert.equal(harness.runs.get("writer")?.received[0], "solo");
+});
+
+test("inheritConversation forks the parent transcript; the default does not", async () => {
+	const entries = [{ type: "message" }] as unknown as FileEntry[];
+	const harness = makeHarness(
+		{
+			"inheritor.md": "---\nname: inheritor\ndescription: Inherits.\ninheritConversation: true\n---\nBody.\n",
+			"writer.md": "---\nname: writer\ndescription: Writes work.\n---\nWrite things.\n",
+		},
+		async () => {},
+	);
+	let reads = 0;
+	const context = {
+		cwd: harness.cwd,
+		parentEntries: () => {
+			reads += 1;
+			return entries;
+		},
+		parentSessionFile: "/sessions/parent.jsonl",
+	};
+
+	await spawnAgents({ tasks: [{ agent: "inheritor", task: "x" }] }, context, harness.deps);
+	assert.deepEqual(harness.inputs[0]?.forkEntries, entries);
+	assert.equal(harness.inputs[0]?.parentSessionFile, "/sessions/parent.jsonl");
+	assert.equal(reads, 1, "the parent transcript is read only for a definition that inherits it");
+
+	await spawnAgents({ tasks: [{ agent: "writer", task: "x" }] }, context, harness.deps);
+	assert.equal(harness.inputs[1]?.forkEntries, undefined);
+	assert.equal(reads, 1, "a definition without the flag never reads the parent transcript");
 });
 
 test("a failure is reported per run and does not discard its sibling", async () => {
@@ -417,8 +460,58 @@ test("a timeout aborts the run and reports it", async () => {
 
 	assert.equal(harness.runs.get("writer")?.aborted, true);
 	assert.equal(harness.runs.get("writer")?.disposed, true);
-	assert.match(results[0]?.error ?? "", /aborted/);
+	assert.match(results[0]?.error ?? "", /timed out after 5ms/);
 	assert.deepEqual(harness.deps.registry.list(), []);
+});
+
+test("a settled run keeps its result when the deadline aborts a sibling", async () => {
+	const harness = makeHarness(DEFINITIONS, async (input, run) => {
+		if (input.agent.name === "reviewer") return;
+		await run.waitForAbort();
+	});
+	const results = await spawn(harness, { ...BOTH_TASKS, timeoutMs: 5 });
+
+	assert.equal(results[0]?.error, undefined, "a finished run is not relabeled by a sibling's timeout");
+	assert.equal(results[0]?.output, "reviewer finished");
+	assert.match(results[1]?.error ?? "", /timed out after 5ms/);
+});
+
+test("a parent signal that already fired stops the runs", async () => {
+	const harness = makeHarness(DEFINITIONS, async (_input, run) => {
+		if (run.aborted) return;
+		await run.waitForAbort();
+	});
+	const controller = new AbortController();
+	controller.abort();
+
+	const results = await spawnAgents(
+		{ tasks: [{ agent: "writer", task: "x" }] },
+		{ cwd: harness.cwd, signal: controller.signal },
+		harness.deps,
+	);
+
+	assert.equal(harness.runs.get("writer")?.aborted, true);
+	assert.equal(results[0]?.error, "aborted");
+});
+
+test("a parent abort stops the runs and is reported as an error", async () => {
+	const harness = makeHarness(DEFINITIONS, async (_input, run) => {
+		await run.waitForAbort();
+	});
+	const controller = new AbortController();
+	const pending = spawnAgents(
+		{ tasks: [{ agent: "writer", task: "x" }] },
+		{ cwd: harness.cwd, signal: controller.signal },
+		harness.deps,
+	);
+	// Let the run start before aborting, so the call sees the signal at all.
+	await new Promise((resolve) => setTimeout(resolve, 5));
+	controller.abort();
+
+	const results = await pending;
+
+	assert.equal(harness.runs.get("writer")?.aborted, true);
+	assert.equal(results[0]?.error, "aborted");
 });
 
 test("results carry billed usage and the transcript path", async () => {
@@ -458,7 +551,7 @@ test("usage from a sibling-induced turn is included in the final result", async 
 		const tool = tools.find((candidate) => candidate.name === "message_agent");
 		assert.ok(tool);
 		writer.usage = { input: 99, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0.5 };
-		await callTool(tool, { to: "writer", text: "extra work" });
+		await callTool(tool, { target_run_id: writer.runId, text: "extra work" });
 	});
 
 	const results = await spawn(harness, BOTH_TASKS);

@@ -29,7 +29,7 @@ Pi から子エージェントを並列に起動し、
 
 - 委譲の深さは既定で 1 です。子を起動できるのは、定義に `extensions: true` を書いた子だけです
 - 子の作業ディレクトリは既定で親と同じです
-- 子の会話文脈は既定で空(`fresh`)です。`context: "fork"` のときだけ親の会話をコピーします
+- 子の会話文脈は既定で空です。定義に `inheritConversation: true` を書いたときだけ親の会話をコピーします
 - 子セッションは `~/.pi/agent/spawn-sessions/` に保存されます
 
 ## 前提条件
@@ -103,14 +103,18 @@ description: ドキュメントのレビュー役
 | `systemPromptMode` | | `append` | 本文の適用方法(`append` / `replace`) |
 | `inheritProjectContext` | | true | 作業ディレクトリの `AGENTS.md` を子に渡すか |
 | `inheritSkills` | | true | skills を子に渡すか |
+| `inheritConversation` | | false | 親の会話をコピーした状態から子を始めるか |
 | `extensions` | | false | グローバル設定の拡張を子で読み込むか |
 
 - `tools`: カンマ区切りの文字列か配列で指定します。空リストなら子専用ツール(`message_agent`)だけ、
-  無指定なら利用可能な全ツールを許可します。子が持たない名前は無視します
+  無指定なら利用可能な全ツールを許可します。
+  子が持たない名前は無視します
 - `model`: 使用モデルは `tasks[].model` → 定義の `model` → 親セッションの順で決まります
 - 本文: 既定で Pi のシステムプロンプトに追加されます。
   `systemPromptMode: replace` なら本文だけになります
 - `extensions: true`: MCP などの拡張を読み込み、子は `spawn_agents` も受け取ります
+- `inheritConversation: true`: 親の会話をコピーした状態から子を始めます。既定は false(空の文脈)です。
+  人間が定義で意図して指定するもので、モデルは呼び出しごとに選べません
 - 値が不正な項目は警告して無視します(`systemPromptMode` は `append` に戻します)
 
 ### 定義の反映
@@ -125,9 +129,7 @@ description: ドキュメントのレビュー役
 
 ```text
 spawn_agents({
-  tasks: [{ agent, task, model?, cwd?, resume_run_id? }, ...],
-  context?: "fresh" | "fork",
-  timeout_seconds?: number
+  tasks: [{ agent, task, model?, cwd?, resume_run_id? }, ...]
 })
 ```
 
@@ -140,8 +142,6 @@ spawn_agents({
 | `tasks[].model` | | 定義の `model` | 使用モデルの上書き(`provider/id`) |
 | `tasks[].cwd` | | 親と同じ | 子の作業ディレクトリ |
 | `tasks[].resume_run_id` | | — | 再開する run の id |
-| `context` | | `fresh` | `fresh`(空) / `fork`(親の会話をコピー) |
-| `timeout_seconds` | | 制限なし | 呼び出し全体の制限時間(秒) |
 
 `tasks[].name` は表示用の名前です。同じ agent を複数の役割で使うときの区別に使います。
 未指定時は agent 名、同じ agent を複数起動したときは `writer-1` のように連番になります。
@@ -174,7 +174,7 @@ spawn_agents({
 
 子1体につき1行で、次の順に表示します。
 
-- 表示名(`tasks[].name`。規則は引数表を参照)と run id
+- 表示名(`tasks[].name`。規則は引数表を参照)と `run_id=<id>`
 - 最新活動(`thinking` / `writing` / `tool: bash` など。ターンが終わった子は `done`)
 - 起動からの経過時間(`done` の子は完了時点で停止)
 - 使用モデル、コンテキスト使用量(`ctx 12.3k/200k (6%)`)、コスト(0ドルのときは省略)
@@ -192,7 +192,7 @@ spawn_agents({
 | `/spawn` | 実行中 run の一覧から1件選び、ログを開きます |
 | `/spawn <target>` / `/spawn logs <target>` | target の run のログを開きます |
 
-target は run id か、一意な agent 名です。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
+target は run id だけです。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
 
 ### ログビュー
 
@@ -235,12 +235,12 @@ spawn_agents({
 ```
 
 ```text
-message_agent({ to, text })
+message_agent({ target_run_id, text })
 ```
 
 | 引数 | 必須 | 意味 |
 |---|---|---|
-| `to` | ○ | 宛先。兄弟の agent 名か run id |
+| `target_run_id` | ○ | 宛先の run id。タスク先頭の宛先一覧に載っています |
 | `text` | ○ | 送る本文 |
 
 ### 配送とターン
@@ -253,13 +253,27 @@ message_agent({ to, text })
 
 ### 宛先の指定
 
-- run id: 呼び出しごとに決まる子の識別子です。結果の見出し `[name] run_id (model)` に載ります
-- agent 名: 同じ agent が複数走っていると曖昧になるため、run id を使ってください
-- 兄弟がいる子のタスク先頭には宛先一覧が自動で付きます
+宛先は run id だけです。agent 名や `agent (run id)` のような表示形式は受け付けません。
+
+- run id: 呼び出しごとに決まる子の識別子(8桁)。結果の見出し `[name] run_id=<id> (model)` に載ります
+- 兄弟がいる子のタスク先頭には、宛先一覧が `target_run_id=` / `name=` / `agent=` の形で自動で付きます
 
 ```text
-Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7b8)
+Siblings you can message with message_agent:
+- target_run_id=a1b2c3d4 name="review-1" agent="reviewer"
 ```
+
+### 受信側が見るメッセージ
+
+受け取った子には、送信元を明示したヘッダー付きで届きます。
+
+```text
+message_agent from_run_id=a1b2c3d4 name="review-1"
+
+本文
+```
+
+返信するときは、この `from_run_id` を `target_run_id` に渡します。
 
 ## 実行結果
 
@@ -282,17 +296,38 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 - 再開した run の `usage` は、再開後に加算された分だけです
 - run が失敗しても、兄弟の結果は失われません
 - 未知の agent や解決できない `model` は、何も起動せずにエラーになります
-- `timeout_seconds` は呼び出し全体の制限時間(秒)です。無指定なら制限はありません。
-  過ぎたら全子を中断します
-- 結果の見出し `[name] run_id (model)` と `output` はモデルにも渡ります。失敗した run は `ERROR: <error>` が渡ります
+- 呼び出し全体の制限時間は `spawn.json` で設定します(既定60分、`0` で無制限)。
+  過ぎたら全子を中断し、各 run は `ERROR:` と理由(`timed out after 60m00s` など)になります
+- 結果の見出し `[name] run_id=<id> (model)` と `output` はモデルにも渡ります。
+  失敗した run は `ERROR: <error>` が渡ります
 - `usage`・`context`・`elapsed_ms`・`session_file` はツール結果の `details` にだけ入り、モデルには渡りません
 
 ## 高度な使い方
 
+### 呼び出しの制限時間を変える
+
+`spawn_agents` の呼び出し全体には既定で60分の制限時間があります。過ぎると全子を中断し、各 run はエラーになります。
+
+設定は `spawn.json` で行います。グローバル(`~/.pi/agent/spawn.json`)を先に読み、
+プロジェクト(`<cwd>/.pi/spawn.json`)があれば上書きします(project trust が必要)。
+
+```json
+{ "timeoutMs": 3600000 }
+```
+
+| キー | 既定 | 意味 |
+|---|---|---|
+| `timeoutMs` | 3600000(60分) | 呼び出し全体の制限時間(ミリ秒)。`0` で無制限 |
+
+- 値が不正なときは警告して既定値に戻します
+- `timeoutMs: 0` は pi-spawn の呼び出し期限だけを無制限にします。
+  モデルのストリーム停止(無応答)は引き続き Pi 本体の `httpIdleTimeoutMs`(既定300秒)とリトライが検出し、
+  該当する run はエラーとして報告されます
+
 ### 親の会話文脈を引き継ぐ
 
-`spawn_agents({ context: "fork" })` で、親の会話をコピーした状態から子を始めます。
-既定は `fresh`(空の文脈)です。
+子の定義に `inheritConversation: true` を書くと、親の会話をコピーした状態から子を始めます。
+既定は false(空の文脈)です。
 
 ### run を再開する
 
@@ -319,7 +354,7 @@ Siblings you can message with message_agent: reviewer (a1b2c3d4), writer (e5f6a7
 | バックグラウンド実行(親を待たせない) | 長い作業は分割して順に起動する |
 | 子から親セッションへの質問 | タスク文に判断基準を書く。曖昧さは spawn 前に解消する |
 | 子が同一ターン内で返信を待つ | 返信は次のターンで届く。会話はターンで進める |
-| 親から実行中の子への指示 | タイムアウトで止めて出し直す |
+| 親から実行中の子への指示 | 親のターンを中止する(Esc)。子も中断され、各 run はエラーとして報告される |
 | 実行中の子の全文の確認 | `/spawn logs <target>` でライブ表示する(TUI のみ) |
 | 完了した子のログの確認 | `session_file` を `pi --session <path>` に渡して開く |
 | 並列での書き込み隔離 | 読み取り中心のタスクに限定する |

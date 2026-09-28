@@ -87,7 +87,7 @@ test("progress lines show each run, its activity, the elapsed time, and the mode
 	]);
 	assert.equal(
 		lines,
-		"[writer] run-1 — tool: bash (1s) · fixture/model\n[reviewer] run-2 — writing (2m10s) · fixture/model",
+		"[writer] run_id=run-1 — tool: bash (1s) · fixture/model\n[reviewer] run_id=run-2 — writing (2m10s) · fixture/model",
 	);
 });
 
@@ -98,7 +98,7 @@ test("a progress line shows context usage and cost when the run reports them", (
 			usage: { ...USAGE, cost: 0.0312 },
 		}),
 	]);
-	assert.equal(lines, "[writer] run-1 — tool: bash (1s) · fixture/model · ctx 12.3k/200k (6%) · $0.03");
+	assert.equal(lines, "[writer] run_id=run-1 — tool: bash (1s) · fixture/model · ctx 12.3k/200k (6%) · $0.03");
 });
 
 test("a progress line carries the latest content line when there is one", () => {
@@ -108,8 +108,8 @@ test("a progress line carries the latest content line when there is one", () => 
 	]);
 	assert.equal(
 		lines,
-		"[writer] run-1 — tool: bash (1s) · fixture/model · checking the README\n" +
-			"[reviewer] run-2 — tool: bash (2s) · fixture/model",
+		"[writer] run_id=run-1 — tool: bash (1s) · fixture/model · checking the README\n" +
+			"[reviewer] run_id=run-2 — tool: bash (2s) · fixture/model",
 	);
 });
 
@@ -129,7 +129,7 @@ test("a final result block carries the stats the model does not see", () => {
 	);
 	assert.equal(
 		text,
-		"[writer] run-1 (fixture/model) — 34s\nfirst\nsecond\n" +
+		"[writer] run_id=run-1 (fixture/model) — 34s\nfirst\nsecond\n" +
 			"10 in / 20 out / 5 cache · $0.25 · ctx 45k/200k (23%) · session /spawn-sessions/run-1.jsonl",
 	);
 });
@@ -179,35 +179,33 @@ test("a progress result carries the preview in the structured details", () => {
 });
 
 test("tool arguments map to the spawn request", () => {
-	assert.deepEqual(spawnRequest({ tasks: [{ agent: "writer", task: "write" }] }), {
+	assert.deepEqual(spawnRequest({ tasks: [{ agent: "writer", task: "write" }] }, 60_000), {
 		tasks: [{ agent: "writer", task: "write" }],
-	});
-	assert.deepEqual(spawnRequest({ tasks: [{ agent: "writer", task: "write" }], context: "fork", timeout_seconds: 5 }), {
-		tasks: [{ agent: "writer", task: "write" }],
-		context: "fork",
-		timeoutMs: 5000,
+		timeoutMs: 60_000,
 	});
 });
 
-test("the spawn context carries the parent transcript only when forking", () => {
+test("a zero timeout means no deadline and stays out of the request", () => {
+	assert.deepEqual(spawnRequest({ tasks: [{ agent: "writer", task: "write" }] }, 0), {
+		tasks: [{ agent: "writer", task: "write" }],
+	});
+});
+
+test("the spawn context carries a lazy parent transcript reader", () => {
 	const entries = [{ type: "message" }];
 	const controller = new AbortController();
 	const ctx = {
 		cwd: "/work",
 		sessionManager: { getEntries: () => entries, getSessionFile: () => "/sessions/parent.jsonl" },
 	} as unknown as ExtensionContext;
-	const params = { tasks: [{ agent: "writer", task: "write" }] };
 
-	assert.deepEqual(spawnContext(ctx, params, controller.signal, undefined), {
-		cwd: "/work",
-		signal: controller.signal,
-		parentSessionFile: "/sessions/parent.jsonl",
-	});
-	assert.deepEqual(spawnContext(ctx, { ...params, context: "fork" }, undefined, undefined), {
-		cwd: "/work",
-		parentEntries: entries,
-		parentSessionFile: "/sessions/parent.jsonl",
-	});
+	const context = spawnContext(ctx, controller.signal, undefined);
+
+	assert.deepEqual(
+		{ ...context, parentEntries: undefined },
+		{ cwd: "/work", signal: controller.signal, parentSessionFile: "/sessions/parent.jsonl", parentEntries: undefined },
+	);
+	assert.deepEqual(context.parentEntries?.(), entries);
 });
 
 test("the spawn context streams progress through the tool update callback", () => {
@@ -216,12 +214,7 @@ test("the spawn context streams progress through the tool update callback", () =
 		cwd: "/work",
 		sessionManager: { getEntries: () => [], getSessionFile: () => undefined },
 	} as unknown as ExtensionContext;
-	const context = spawnContext(
-		ctx,
-		{ tasks: [{ agent: "writer", task: "write" }] },
-		undefined,
-		(result) => void updates.push(result),
-	);
+	const context = spawnContext(ctx, undefined, (result) => void updates.push(result));
 
 	assert.ok(context.onProgress);
 	context.onProgress([progress()]);
@@ -229,8 +222,8 @@ test("the spawn context streams progress through the tool update callback", () =
 });
 
 test("the model-facing result keeps the header, output, and errors", () => {
-	assert.equal(formatResults([result({ output: "answer" })]), "[writer] run-1 (fixture/model)\nanswer");
-	assert.equal(formatResults([result({ error: "boom" })]), "[writer] run-1 (fixture/model)\nERROR: boom");
+	assert.equal(formatResults([result({ output: "answer" })]), "[writer] run_id=run-1 (fixture/model)\nanswer");
+	assert.equal(formatResults([result({ error: "boom" })]), "[writer] run_id=run-1 (fixture/model)\nERROR: boom");
 });
 
 /** A flushed session needs one assistant message, matching Pi's own write policy. */
@@ -305,7 +298,7 @@ test("the result renderer shows the live line while running and the stats block 
 		{} as never,
 	);
 	const text = done?.render(80).join("\n") ?? "";
-	assert.ok(text.includes("[writer] run-1"));
+	assert.ok(text.includes("[writer] run_id=run-1"));
 	assert.ok(text.includes("$0.25"));
 	assert.ok(!text.includes("model-facing"), "the model-facing text is not the UI view");
 });

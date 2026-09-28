@@ -7,12 +7,14 @@ import { test } from "node:test";
 import {
 	displayNames,
 	extractAssistantText,
+	failureLabel,
+	lastAssistantOutcome,
 	resolveModel,
 	runElapsed,
 	selectActiveTools,
 	subtractUsage,
 } from "../../src/spawn.ts";
-import type { RunHandle } from "../../src/types.ts";
+import type { ChannelSnapshot, RunHandle } from "../../src/types.ts";
 
 const available = [
 	{ provider: "fixture", id: "parent" },
@@ -125,6 +127,19 @@ test("ignores anything that is not assistant text", () => {
 	assert.equal(extractAssistantText("text"), undefined);
 });
 
+test("reads how the last assistant message ended", () => {
+	assert.deepEqual(
+		lastAssistantOutcome([
+			{ role: "assistant", stopReason: "toolUse" },
+			{ role: "assistant", stopReason: "error", errorMessage: "provider exploded" },
+		]),
+		{ stopReason: "error", errorMessage: "provider exploded" },
+	);
+	assert.deepEqual(lastAssistantOutcome([{ role: "assistant", stopReason: "aborted" }]), { stopReason: "aborted" });
+	assert.equal(lastAssistantOutcome([{ role: "user", content: "hi" }]), undefined);
+	assert.equal(lastAssistantOutcome([{ role: "assistant" }]), undefined);
+});
+
 test("a declared tool list always keeps the injected child tool", () => {
 	// The session drops names it has no tool for; this merge must not drop the
 	// child's own message tool along with them.
@@ -202,4 +217,20 @@ test("a settled run keeps the elapsed time it settled at", () => {
 	const handle = { startedAt: 1000 } as unknown as RunHandle;
 	assert.equal(runElapsed(handle, { activity: "done", settledAt: 5000, usage: ZERO_USAGE }), 4000);
 	assert.ok(runElapsed(handle, { activity: "thinking", usage: ZERO_USAGE }) > 0, "a live run measures to now");
+});
+
+test("a failure label comes from the abort reason first, then the outcome", () => {
+	const snapshot = (outcome?: { stopReason: string; errorMessage?: string }): ChannelSnapshot => ({
+		activity: "done",
+		usage: ZERO_USAGE,
+		...(outcome === undefined ? {} : { outcome }),
+	});
+	const handle = { abortReason: undefined } as unknown as RunHandle;
+
+	assert.equal(failureLabel({ ...handle, abortReason: "timed out after 5ms" }, snapshot()), "timed out after 5ms");
+	assert.equal(failureLabel(handle, snapshot({ stopReason: "error", errorMessage: "boom" })), "boom");
+	assert.equal(failureLabel(handle, snapshot({ stopReason: "error" })), "the model run failed");
+	assert.equal(failureLabel(handle, snapshot({ stopReason: "aborted" })), "aborted");
+	assert.equal(failureLabel(handle, snapshot({ stopReason: "stop" })), undefined);
+	assert.equal(failureLabel(handle, snapshot()), undefined);
 });
