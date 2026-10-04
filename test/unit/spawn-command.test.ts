@@ -2,11 +2,14 @@
  * Unit: the /spawn command's routing.
  *
  * The command is the user's only view into a running child, so each routing
- * path (no runs, unknown target, picker, direct target) is pinned here without
- * a terminal.
+ * path (no runs, unknown target, picker, direct target, status) is pinned here
+ * without a terminal.
  */
 
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
@@ -43,11 +46,14 @@ function handle(sessionId: string, agent: string, channel: Partial<AgentChannel>
 function makeContext(
 	mode: string,
 	select: (title: string, options: string[]) => Promise<string | undefined> = async () => undefined,
+	options: { cwd?: string; trusted?: boolean } = {},
 ) {
 	const notified: Array<{ message: string; type: string | undefined }> = [];
 	const panels: number[] = [];
 	const ctx = {
 		mode,
+		cwd: options.cwd ?? process.cwd(),
+		isProjectTrusted: () => options.trusted ?? true,
 		ui: {
 			notify: (message: string, type?: string) => void notified.push({ message, type }),
 			select,
@@ -157,4 +163,40 @@ test("the terminal UI opens the live view for a resolved run", async () => {
 
 	assert.deepEqual(notified, []);
 	assert.equal(panels.length, 1);
+});
+
+test("status reports the resolved deadline and its config files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-spawn-status-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	mkdirSync(agentDir, { recursive: true });
+	mkdirSync(join(cwd, ".pi"), { recursive: true });
+	const saved = process.env["PI_CODING_AGENT_DIR"];
+	process.env["PI_CODING_AGENT_DIR"] = agentDir;
+	try {
+		const config = join(agentDir, "spawn.json");
+		writeFileSync(config, JSON.stringify({ timeoutMs: 120_000 }));
+		const { ctx, notified } = makeContext("tui", undefined, { cwd, trusted: false });
+		await runSpawnCommand("status", ctx, createRunRegistry());
+		assert.deepEqual(notified[0], {
+			message: `pi-spawn: timeoutMs 120000 (2m)\nconfig: ${config} | ${join(cwd, ".pi", "spawn.json")}`,
+			type: "info",
+		});
+
+		writeFileSync(config, JSON.stringify({ timeoutMs: 0 }));
+		await runSpawnCommand("status", ctx, createRunRegistry());
+		assert.match(notified[1]?.message ?? "", /timeoutMs 0 \(unlimited\)/);
+
+		writeFileSync(config, "{");
+		await runSpawnCommand("status", ctx, createRunRegistry());
+		assert.match(notified[2]?.message ?? "", /warning: .*spawn\.json is not valid JSON/);
+
+		writeFileSync(join(cwd, ".pi", "spawn.json"), JSON.stringify({ timeoutMs: 60_000 }));
+		await runSpawnCommand("status", ctx, createRunRegistry());
+		assert.match(notified[3]?.message ?? "", /warning: ignoring .*spawn\.json: project is not trusted/);
+	} finally {
+		if (saved === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+		else process.env["PI_CODING_AGENT_DIR"] = saved;
+		rmSync(root, { recursive: true, force: true });
+	}
 });

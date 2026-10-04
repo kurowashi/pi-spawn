@@ -171,6 +171,16 @@ spawn_agents({
 実行開始時に各子の状態を表示し、その後は1秒ごとに更新します。
 実行中に既定で見えるのは最新出力の1行だけです。詳しくは[実行中の子を見る](#実行中の子を見る)を参照してください。
 
+## コマンド
+
+| コマンド | 動作 |
+|---|---|
+| `/spawn` | 実行中 run の一覧から1件選び、ログを開きます |
+| `/spawn <target>` / `/spawn logs <target>` | target の run のログを開きます |
+| `/spawn status` | 解決済みの制限時間と設定ファイルの解決元を表示します |
+
+target は session id だけです。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
+
 ## 実行中の子を見る
 
 `spawn_agents` は親のターンを占有しますが、その間も拡張コマンドは即座に実行されます。
@@ -189,15 +199,6 @@ spawn_agents({
 
 結果の表示(UI)は run ごとのブロックで、見出し・出力の抜粋・統計行(usage、コンテキスト、経過時間、`session_file`)を出します。
 全文は `/spawn logs <target>` でライブ表示でき、完了後は結果の `session_file` を `pi --session <path>` に渡しても開けます。
-
-### コマンド
-
-| コマンド | 動作 |
-|---|---|
-| `/spawn` | 実行中 run の一覧から1件選び、ログを開きます |
-| `/spawn <target>` / `/spawn logs <target>` | target の run のログを開きます |
-
-target は session id だけです。一覧の選択肢には、進捗行と同じ情報に agent 名を加えたものを出します。
 
 ### ログビュー
 
@@ -313,7 +314,7 @@ message_agent from_session_id=a1b2c3d4 name="review-1"
 
 `spawn_agents` の呼び出し全体には既定で60分の制限時間があります。過ぎると全子を中断し、各 run はエラーになります。
 
-設定は `spawn.json` で行います。グローバル(`~/.pi/agent/spawn.json`)を先に読み、
+設定は `spawn.json` で行います。グローバル(`~/.pi/agent/spawn.json`、`PI_CODING_AGENT_DIR` で変更可)を先に読み、
 プロジェクト(`<cwd>/.pi/spawn.json`)があれば上書きします(project trust が必要)。
 
 ```json
@@ -324,7 +325,8 @@ message_agent from_session_id=a1b2c3d4 name="review-1"
 |---|---|---|
 | `timeoutMs` | 3600000(60分) | 呼び出し全体の制限時間(ミリ秒)。`0` で無制限 |
 
-- 値が不正なときは警告して既定値に戻します
+- 値が不正なときは警告して既定値に戻します。警告は `/spawn status` にも出ます
+- 現在の解決済みの値と設定ファイルの解決元は `/spawn status` で確認できます
 - `timeoutMs: 0` は pi-spawn の呼び出し期限だけを無制限にします。
   モデルのストリーム停止(無応答)は引き続き Pi 本体の `httpIdleTimeoutMs`(既定300秒)とリトライが検出し、
   該当する run はエラーとして報告されます

@@ -37,6 +37,7 @@
 | `spawn.json` の解決順はグローバル → trust 済み project。`0` は無制限 | `test/unit/config.test.ts` | `src/config.ts` |
 | 制限時間の既定は 3600000ms | `test/unit/config.test.ts` | `src/config.ts` の `DEFAULT_CONFIG` |
 | 解決した `timeoutMs` は spawn request に渡る | `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `spawnRequest` |
+| `/spawn status` は解決済みの `timeoutMs` と設定ファイルの解決元を通知する | `test/unit/spawn-command.test.ts` | `src/tools/spawn-command.ts` の `statusReport` |
 | 制限時間に達した run は中断し、`timed out after ...` を返す | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `watchAborts` |
 | 失敗した run は成功にせず、`aborted` / provider の `errorMessage` をエラーとして報告する | `test/unit/spawn.test.ts` + `test/unit/session-adapter.test.ts` | `src/spawn.ts` の `failureLabel` / `lastAssistantOutcome` |
 | 兄弟の timeout は、自分の prompt が settle 済みの run の結果を書き換えない | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `promptSettled` |
@@ -111,8 +112,8 @@
 4. spawn した子のセッションが `~/.pi/agent/spawn-sessions/` に残り、結果の `session_file` と一致し、
    `pi --session <path>` で開けること。`inheritConversation: true` の定義の子は親の履歴から始まること。
 5. 子の実行中に `spawn_agents` の各子の1行と、
-   完了後の結果の表示に表示名・モデル・コンテキスト使用量・コスト・run 別 usage・`session_file` が出ること
-   (進捗の追従と `done` の挙動は ADR 0004 と README の通り)。
+   完了後の結果の表示に表示名・モデル・コンテキスト使用量・コスト・run 別 usage・`session_file` が出ること。
+   進捗の追従と `done` の挙動は ADR 0004 と README の通りです。
    完了後、親セッションのコスト統計に子の使用量が加算されていること(`/session` のコスト統計で確認)。
 6. 子を spawn したときの結果の `session_id` と `entry_id` を `resume_session_id` / `resume_entry_id` に渡して再 spawn し、
    前回の文脈を踏まえた返答が返ること。結果の `session_id` が前回と同じで、`session_file` も同じ、
@@ -135,12 +136,11 @@
 2. 実使用: `~/.pi/agent/sessions/**/*.jsonl` と `~/.pi/agent/spawn-sessions/*.jsonl` を JSONL として読み、
    `role: "assistant"` の `content[].type == "toolCall"` を集計する。
    ツール別の呼び出し回数、
-   `spawn_agents` の `tasks[]` の各フィールド(agent / task / name / model / cwd / resume_session_id / resume_entry_id)と
-   `message_agent` の `target_session_id` / `text` の使用率、
+   `spawn_agents` の `tasks[]` の各フィールド(agent / task / name / model / cwd / resume_session_id / resume_entry_id)と `message_agent` の `target_session_id` / `text` の使用率、
    `role: "toolResult"` のエラー(`details.error` か `Validation failed for tool`)を出す。
    - 開発セッションの意図的な不正 agent テストは誤用と数えず、通常利用と分ける。
-   - 文字列 grep で `"name":"spawn_agents"` を数えると、システムプロンプトの `toolsAdded` を
-     拾って過大になる。必ず toolCall パートをパースする。
+   - 文字列 grep で `"name":"spawn_agents"` を数えると、
+     システムプロンプトの `toolsAdded` を拾って過大になる。必ず toolCall パートをパースする。
 3. 判定: トークン占有率と使用率を突き合わせる。
    - 余剰候補: トークンが大きく使用率が低い引数(`model` / `resume_entry_id` 等)。
    - 不足: 誤用エラー。エラー本文が回復情報(定義済み agent 一覧等)を返せているか。

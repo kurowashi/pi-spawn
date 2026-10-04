@@ -6,14 +6,15 @@
  * the only way to look inside a child.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionCommandContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { type LoadedSpawnConfig, loadSpawnConfig } from "../config.ts";
 import { contextText, formatCost, formatElapsed } from "../format.ts";
 import { LogView, type LogViewStatus } from "../log-view.ts";
 import { explainTarget, type RunRegistry } from "../registry.ts";
 import { runElapsed, subtractUsage } from "../spawn.ts";
 import type { RunHandle } from "../types.ts";
 
-export const COMMAND_DESCRIPTION = "List or follow live spawned runs";
+export const COMMAND_DESCRIPTION = "List or follow live spawned runs; status shows the resolved timeout config";
 
 export function registerSpawnCommand(pi: ExtensionAPI, registry: RunRegistry): void {
 	pi.registerCommand("spawn", {
@@ -22,12 +23,38 @@ export function registerSpawnCommand(pi: ExtensionAPI, registry: RunRegistry): v
 	});
 }
 
+/** Milliseconds as a short duration: 0 means no deadline. */
+function timeoutText(ms: number): string {
+	if (ms === 0) return "unlimited";
+	if (ms < 60_000) return `${ms / 1000}s`;
+	const minutes = ms / 60_000;
+	return Number.isInteger(minutes) ? `${minutes}m` : `${minutes.toFixed(1)}m`;
+}
+
+/** The `/spawn status` report: the resolved deadline and where it came from. */
+export function statusReport(loaded: LoadedSpawnConfig): string {
+	return [
+		`pi-spawn: timeoutMs ${loaded.config.timeoutMs} (${timeoutText(loaded.config.timeoutMs)})`,
+		`config: ${loaded.globalFile} | ${loaded.projectFile}`,
+		...loaded.warnings.map((warning) => `warning: ${warning}`),
+	].join("\n");
+}
+
 /** No argument picks a run; `/spawn <target>` and `/spawn logs <target>` open that run's log. */
 export async function runSpawnCommand(
 	args: string,
 	ctx: ExtensionCommandContext,
 	registry: RunRegistry,
 ): Promise<void> {
+	if (args.trim() === "status") {
+		const loaded = loadSpawnConfig({
+			cwd: ctx.cwd,
+			agentDir: getAgentDir(),
+			projectTrusted: ctx.isProjectTrusted(),
+		});
+		ctx.ui.notify(statusReport(loaded), "info");
+		return;
+	}
 	const runs = registry.list();
 	if (runs.length === 0) {
 		ctx.ui.notify("No live spawn runs", "info");
