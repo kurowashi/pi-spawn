@@ -13,7 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export const CONFIG_FILE_NAME = "spawn.json";
+const CONFIG_FILE_NAME = "spawn.json";
 
 export interface SpawnConfig {
 	/** Whole-call deadline in milliseconds; 0 means no deadline. */
@@ -32,11 +32,11 @@ export interface LoadedSpawnConfig {
 	projectFile: string;
 }
 
-export function globalConfigPath(agentDir: string): string {
+function globalConfigPath(agentDir: string): string {
 	return path.join(agentDir, CONFIG_FILE_NAME);
 }
 
-export function projectConfigPath(cwd: string): string {
+function projectConfigPath(cwd: string): string {
 	return path.join(cwd, ".pi", CONFIG_FILE_NAME);
 }
 

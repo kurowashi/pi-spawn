@@ -36,7 +36,7 @@ export interface ModelIdentity {
 }
 
 /** Where the model came from. Reported on every result so an override can never be silent. */
-export type ModelSource = "task" | "definition" | "parent";
+type ModelSource = "task" | "definition" | "parent";
 
 export type ModelResolution<T> =
 	| { model: T; source: ModelSource }
@@ -565,7 +565,7 @@ export function subtractUsage(current: RunUsage, base: RunUsage): RunUsage {
  * the same keys the `message_agent` result uses: session id first, labels as
  * annotations.
  */
-export function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]): string {
+function siblingBriefing(self: RunHandle, handles: readonly RunHandle[]): string {
 	const siblings = handles.filter((handle) => handle.sessionId !== self.sessionId);
 	if (siblings.length === 0) return "";
 	const list = siblings

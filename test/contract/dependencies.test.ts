@@ -25,10 +25,10 @@ const ALLOWED_PEER_DEPENDENCIES = new Set([
 const ALLOWED_DEV_DEPENDENCIES = new Set([
 	"@biomejs/biome",
 	"@earendil-works/pi-agent-core",
-	"@earendil-works/pi-ai",
 	"@earendil-works/pi-coding-agent",
 	"@earendil-works/pi-tui",
 	"@types/node",
+	"knip",
 	"lefthook",
 	"typebox",
 	"typescript",

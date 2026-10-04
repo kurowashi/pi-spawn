@@ -14,7 +14,7 @@ import { deliverMessage } from "../deliver.ts";
 import { explainTarget, type RunRegistry } from "../registry.ts";
 import type { MessageSender } from "../types.ts";
 
-export const DESCRIPTION = "Message a sibling agent run by target_session_id. The reply arrives as a new turn.";
+const DESCRIPTION = "Message a sibling agent run by target_session_id. The reply arrives as a new turn.";
 
 const Parameters = Type.Object(
 	{

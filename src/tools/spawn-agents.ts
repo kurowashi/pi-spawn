@@ -33,7 +33,7 @@ import {
 import type { RunProgress, RunUsage, SpawnResult } from "../types.ts";
 import { childTools } from "./child-tools.ts";
 
-export const DESCRIPTION =
+const DESCRIPTION =
 	"Spawn 1..N child agents in parallel and wait for all results. Use for independent subtasks that need no parent input. " +
 	"They can message each other.";
 

@@ -14,7 +14,7 @@ import { explainTarget, type RunRegistry } from "../registry.ts";
 import { runElapsed, subtractUsage } from "../spawn.ts";
 import type { RunHandle } from "../types.ts";
 
-export const COMMAND_DESCRIPTION = "List or follow live spawned runs; status shows the resolved timeout config";
+const COMMAND_DESCRIPTION = "List or follow live spawned runs; status shows the resolved timeout config";
 
 export function registerSpawnCommand(pi: ExtensionAPI, registry: RunRegistry): void {
 	pi.registerCommand("spawn", {
@@ -32,7 +32,7 @@ function timeoutText(ms: number): string {
 }
 
 /** The `/spawn status` report: the resolved deadline and where it came from. */
-export function statusReport(loaded: LoadedSpawnConfig): string {
+function statusReport(loaded: LoadedSpawnConfig): string {
 	return [
 		`pi-spawn: timeoutMs ${loaded.config.timeoutMs} (${timeoutText(loaded.config.timeoutMs)})`,
 		`config: ${loaded.globalFile} | ${loaded.projectFile}`,
