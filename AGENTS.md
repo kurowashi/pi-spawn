@@ -21,6 +21,8 @@
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | この拡張が登録するツール面は `spawn_agents`(親)/ `message_agent`(子)の2つだけ | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `EXPECTED_PARENT_TOOLS`、`src/tools/child-tools.ts`、`src/spawn.ts` の `noExtensions` |
+| 子のセッションは `session_start` を発火する(SDK は `bindExtensions` を呼ばないと発火しない) | 手動確認項目 2 | `src/spawn.ts` の `bindExtensions`、`docs/adr/0011-bind-child-extensions.md` |
+| `extensions: true` の子は CLI と同じ内蔵拡張(codemode / tool_search / MCP)を使う | 手動確認項目 2 | `src/spawn.ts` の `extensionFactories` |
 | 登録コマンドは `spawn` だけ | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `EXPECTED_COMMANDS`、`src/index.ts` |
 | ツール定義(説明+スキーマ)の合計が **400 トークン**以内 | `test/contract/budget.test.ts` | `test/contract/budget.test.ts` の `TOKEN_BUDGET`(計測値はコメント) |
 | ツール説明は **160 文字**以内 | `test/contract/tool-surface.test.ts` | `test/contract/tool-surface.test.ts` の `MAX_DESCRIPTION_CHARS` |
@@ -47,6 +49,7 @@
 | 制約 | 検証 | 定義・実装箇所 |
 |---|---|---|
 | カタログは同名 agent を1件だけ表示する(ファイル名の昇順で最初の定義) | `test/unit/catalog.test.ts` | `src/catalog.ts` の `formatCatalog` |
+| カタログは `spawn_catalog` セクションとして注入し、プロンプトを固定しない | `test/contract/prompt-surface.test.ts` | `src/index.ts` の `before_agent_start` |
 | 定義の解決順は project → user。project 定義は trust 済みのときだけ読む | `test/unit/catalog.test.ts` + `test/integration/spawn-agents.test.ts` | `src/catalog.ts` の `definitionRoots` / `discoverAgents` |
 | resume は 2 フィールドの組で指定する(`resume_session_id` + `resume_entry_id`。両方必須) | `test/integration/spawn-agents.test.ts` | `src/spawn.ts` の `resolveResume` |
 | resume の entry は保存済みセッションに存在する | `test/integration/spawn-agents.test.ts` + `test/unit/spawn-tool.test.ts` | `src/tools/spawn-agents.ts` の `hasSessionEntry` |

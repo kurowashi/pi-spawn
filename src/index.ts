@@ -18,10 +18,12 @@ export default function registerSpawnExtension(pi: ExtensionAPI): void {
 	registerSpawnCommand(pi, registry);
 
 	// The catalog is the only discovery surface: no list tool, no skill file.
+	// It is a prompt section so the prompt stays open to extensions registered
+	// later; returning a whole systemPrompt would freeze it (ADR 0010).
 	pi.on("before_agent_start", (event, ctx) => {
 		const roots = definitionRoots(ctx.cwd, getAgentDir(), ctx.isProjectTrusted());
 		const catalog = formatCatalog(discoverAgents(roots).agents);
 		if (catalog === undefined) return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${catalog}` };
+		event.systemPromptOptions.sections["spawn_catalog"] = catalog;
 	});
 }
