@@ -617,6 +617,11 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 		sessionManager: createSessionManager(input),
 	});
 
+	// The SDK holds session_start until something binds it. Without this call no
+	// extension hook runs in the child, so every tool an extension registers stays
+	// active and its schema is re-sent on every request of the run.
+	await session.bindExtensions({});
+
 	applyDeclaredTools(
 		session,
 		input.agent,
