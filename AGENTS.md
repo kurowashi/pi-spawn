@@ -14,6 +14,25 @@
 カバレッジは `test/unit` と `test/integration` で計測します。下の表の「検証」列は個別の検証箇所であり、
 自動検証はすべて `verify` に含まれます。
 
+## ローカル開発
+
+依存は devDependency と、Pi が供給する peer 依存だけです。実行時依存(`dependencies`)はありません。コマンドはリポジトリのルートで実行します。
+
+```bash
+npm install
+npm run verify
+npm test
+npm run test:coverage
+npm run fix
+```
+
+- `npm run verify`: 完了条件を検証します（biome + tsc + 全テスト + カバレッジ閾値）
+- `npm test`: 全テストを実行します
+- `npm run test:coverage`: unit と integration だけをカバレッジ閾値付きで実行します
+- `npm run fix`: 自動修正を実行します
+
+コミット前に lefthook が format・lint・型検査を実行します。フックの有効化は `npx lefthook install` を手動で行います。`package.json` の lifecycle script（`prepare` / `postinstall`）には置きません。`pi install git:...` は `npm install --omit=dev` を実行するため、devDependency の lefthook がない状態で script が走るとインストールごと失敗します。CI はフックと同じ検査を独立に実行します。
+
 ## 制約
 
 ### ツール面
