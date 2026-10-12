@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { AgentToolResult, ExtensionContext, FileEntry, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionToolContext, FileEntry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
 import { type CreateChannelInput, type SpawnDependencies, spawnAgents } from "../../src/spawn.ts";
 import { childTools } from "../../src/tools/child-tools.ts";
@@ -127,7 +127,7 @@ function createFakeRun(agent: string): FakeRun {
 }
 
 /** The message tool reads no context field; the cast keeps the fake honest. */
-const TEST_CONTEXT = {} as ExtensionContext;
+const TEST_CONTEXT = {} as ExtensionToolContext;
 
 async function callTool(tool: ToolDefinition, params: Record<string, unknown>): Promise<AgentToolResult<unknown>> {
 	return tool.execute("test-call", params as never, undefined, undefined, TEST_CONTEXT);

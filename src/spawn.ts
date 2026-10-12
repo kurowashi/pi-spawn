@@ -9,6 +9,9 @@
 import {
 	type AgentSession,
 	createAgentSession,
+	createCodemodeExtension,
+	createMcpExtension,
+	createToolSearchExtension,
 	DefaultResourceLoader,
 	type FileEntry,
 	SessionManager,
@@ -601,6 +604,19 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 		noPromptTemplates: true,
 		noSkills: !input.agent.inheritSkills,
 		noContextFiles: !input.agent.inheritProjectContext,
+		// An SDK session gets none of the CLI's built-in extensions. A child that asks
+		// for `extensions: true` wants the same ones the parent runs, so supply them here.
+		// codemode and tool_search register inactive and are activated by the MCP
+		// extension for servers whose exposure needs them, which is how the CLI does it.
+		...(input.agent.extensions
+			? {
+					extensionFactories: [
+						createCodemodeExtension({ mode: "on" }),
+						createToolSearchExtension(),
+						createMcpExtension(),
+					],
+				}
+			: {}),
 		...(input.agent.systemPromptMode === "replace"
 			? { systemPrompt: input.agent.body }
 			: { appendSystemPrompt: [input.agent.body] }),

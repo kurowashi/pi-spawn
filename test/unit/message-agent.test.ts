@@ -7,13 +7,13 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AgentToolResult, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createRunRegistry } from "../../src/registry.ts";
 import { createMessageAgentTool } from "../../src/tools/message-agent.ts";
 import type { AgentChannel, RunHandle } from "../../src/types.ts";
 
 /** The tool reads no context field; the cast keeps the call site honest. */
-const TEST_CONTEXT = {} as ExtensionContext;
+const TEST_CONTEXT = {} as ExtensionToolContext;
 
 function handle(sessionId: string, agent: string, channel: Partial<AgentChannel> = {}): RunHandle {
 	return {
