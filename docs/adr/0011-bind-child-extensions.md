@@ -1,6 +1,6 @@
 # ADR 0011: 子セッションの拡張を bind して、CLI 内蔵拡張を子にも与える
 
-- 状態: 採用
+- 状態: 採用（決定 2 の対象は `extensions: true` の子のみ。llama.cpp 拡張は別の決定として ADR 0012 で扱う）
 - 日付: 2026-10-12
 - 対象: `createChildChannel` の拡張の読み込みと `session_start` の発火
 

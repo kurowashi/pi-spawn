@@ -6,6 +6,7 @@
  * flow is testable without a model, a network, or a session file.
  */
 
+import { fileURLToPath } from "node:url";
 import {
 	type AgentSession,
 	createAgentSession,
@@ -594,12 +595,22 @@ const DEFAULT_ACTIVITY = "starting";
 type SessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
 type SessionModel = NonNullable<SessionOptions["model"]>;
 
+/**
+ * The CLI's built-in llama.cpp extension. An SDK session does not load it, and
+ * the provider it registers is needed to authenticate a llama.cpp model.
+ * Named explicitly, it loads even when `noExtensions` is set.
+ */
+const LLAMA_EXTENSION_PATH = fileURLToPath(
+	new URL("./extensions/llama/index.js", import.meta.resolve("@earendil-works/pi-coding-agent")),
+);
+
 /** Create the real in-process child session for one run. */
 export async function createChildChannel(input: CreateChannelInput): Promise<AgentChannel> {
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
 		noExtensions: !input.agent.extensions,
+		additionalExtensionPaths: [LLAMA_EXTENSION_PATH],
 		noThemes: true,
 		noPromptTemplates: true,
 		noSkills: !input.agent.inheritSkills,
@@ -625,6 +636,8 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 
 	const { session } = await createAgentSession({
 		cwd: input.cwd,
+		// Without this the SDK reads credentials from the default agent dir, not the parent's.
+		agentDir: input.agentDir,
 		// AgentIdentity is structurally the SDK model; this is the single cast at that boundary.
 		model: input.model as SessionModel,
 		...(input.agent.thinking === undefined ? {} : { thinkingLevel: input.agent.thinking }),
