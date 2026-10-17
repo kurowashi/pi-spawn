@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "./catalog.ts";
 import { formatElapsed } from "./format.ts";
+import { expandDefinitionBody } from "./memory-import.ts";
 import type { RunRegistry } from "./registry.ts";
 import type {
 	AgentChannel,
@@ -606,6 +607,12 @@ const LLAMA_EXTENSION_PATH = fileURLToPath(
 
 /** Create the real in-process child session for one run. */
 export async function createChildChannel(input: CreateChannelInput): Promise<AgentChannel> {
+	const prompt = expandDefinitionBody({
+		body: input.agent.body,
+		bodyPath: input.agent.path,
+		cwd: input.cwd,
+		agentDir: input.agentDir,
+	});
 	const loader = new DefaultResourceLoader({
 		cwd: input.cwd,
 		agentDir: input.agentDir,
@@ -628,9 +635,7 @@ export async function createChildChannel(input: CreateChannelInput): Promise<Age
 					],
 				}
 			: {}),
-		...(input.agent.systemPromptMode === "replace"
-			? { systemPrompt: input.agent.body }
-			: { appendSystemPrompt: [input.agent.body] }),
+		...(input.agent.systemPromptMode === "replace" ? { systemPrompt: prompt } : { appendSystemPrompt: [prompt] }),
 	});
 	await loader.reload();
 
