@@ -13,7 +13,7 @@
 2. agent 定義の frontmatter に `extensions: true` を書いた agent を spawn します。子から MCP ツールを1つ呼ばせ、結果に現れること。呼び出しの終了後に MCP サーバーのプロセスが残っていないこと（`pgrep -f` などで確認）。
 3. 既定の子（`extensions` 無し）からは `spawn_agents` を呼べないこと。
 4. spawn した子のセッションが `~/.pi/agent/spawn-sessions/` に残ること。結果の `session_file` と一致し、`pi --session <path>` で開けること。`inheritConversation: true` の定義の子は親の履歴から始まること。
-5. 子の実行中、`spawn_agents` の各子の1行が表示されること。完了後の結果に表示名・モデル・コンテキスト使用量・コスト・run 別 usage・`session_file` が出ること。進捗の追従と `done` の挙動は [ADR 0004](adr/0004-progress-done-state.md) と [README](../README.md) の通りです。完了後、親セッションのコスト統計に子の使用量が加算されていること（`/session` のコスト統計で確認）。
+5. 子の実行中、`spawn_agents` の各子の1行が表示されること。完了後の結果に表示名・モデル・コンテキスト使用量・コスト・run 別 usage・`session_file` が出ること。進捗の追従と `done` の挙動は [ADR 0004](adr/0004-progress-done-state.md) と [リファレンス](reference.md#進捗表示) の通りです。完了後、親セッションのコスト統計に子の使用量が加算されていること（`/session` のコスト統計で確認）。
 6. 子を spawn したときの結果の `session_id` と `entry_id` を、`resume_session_id` / `resume_entry_id` に渡して再 spawn します。
    - 前回の文脈を踏まえた返答が返ること。
    - 結果の `session_id` と `session_file` が前回と同じであること。
@@ -21,7 +21,7 @@
    - その再開結果の組で再度 resume できること。
    - 親を `/tree` で戻してから古い結果の組で resume し、破棄した枝の続きが混ざらないこと。
 7. `<project>/.pi/agents/` の定義を確認します。信頼していないプロジェクトではカタログに現れず spawn も失敗すること。trust 済み（`--approve` など）では現れて spawn できること。
-8. 子の実行中に `/spawn` でログを開き、追記への追従・スクロール・`Esc` での終了を確認します。実行が終わった後もビューが壊れず、`finished` 表示に変わること（キーの網羅は [README](../README.md) を参照）。
+8. 子の実行中に `/spawn` でログを開き、追記への追従・スクロール・`Esc` での終了を確認します。実行が終わった後もビューが壊れず、`finished` 表示に変わること（キーの網羅は [リファレンス](reference.md#ログビュー) を参照）。
 9. `~/.pi/agent/spawn.json` に小さい `timeoutMs`（例: 5000）を書いて長いタスクを spawn します。結果が `timed out after 5s` のエラーになること。`0` なら制限されないこと（確認後は戻す）。
 10. 定義本文に `@path`（相対・`~/`・絶対）を書いた agent を spawn します。子の作業ディレクトリ基準で解決した参照先の内容が、子のプロンプトの `Contents of <絶対パス> (...)` として本文の後ろに入ること。子に「プロンプトの参照先の内容を答えて」と頼んで確認します。定義が `user` / `project` のどちらかで説明文が変わること。
 
